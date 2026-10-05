@@ -120,3 +120,11 @@ select
   coalesce((select sum(hours) from variations where job_id = j.id), 0) as variation_hours,
   coalesce((select sum(materials) from variations where job_id = j.id), 0) as variation_materials
 from jobs j;
+
+-- App settings (the login password is stored here as a scrypt hash, never in plain text)
+create table if not exists app_settings (
+  key text primary key,
+  value text not null,
+  updated_at timestamptz default now()
+);
+alter table app_settings enable row level security;

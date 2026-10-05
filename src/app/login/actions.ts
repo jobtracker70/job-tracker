@@ -6,7 +6,7 @@ import { SESSION_COOKIE, SESSION_MAX_AGE, checkPassword, createSessionValue } fr
 
 export async function login(_prev: string | null, formData: FormData) {
   const password = String(formData.get('password') ?? '')
-  if (!checkPassword(password)) {
+  if (!(await checkPassword(password))) {
     await new Promise((r) => setTimeout(r, 1000))
     return 'Wrong password'
   }
