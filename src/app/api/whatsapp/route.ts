@@ -1,5 +1,5 @@
 import { createServiceClient } from '@/lib/supabase'
-import { NextRequest } from 'next/server'
+import { NextRequest, after } from 'next/server'
 
 const VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN!
 const WA_TOKEN = process.env.WHATSAPP_TOKEN!
@@ -36,8 +36,14 @@ export async function POST(req: NextRequest) {
   const from: string = msg.from // e.g. "61412345678" (no +)
   const text: string = msg.text?.body?.trim() ?? ''
 
-  // Process in background, return 200 immediately
-  processMessage(from, text).catch(console.error)
+  // Meta can deliver the same message more than once; only handle each message id once.
+  const { error: dupe } = await createServiceClient()
+    .from('message_log')
+    .insert({ wamid: msg.id, from_number: from, body: text })
+  if (dupe) return new Response('ok', { status: 200 })
+
+  // Reply after responding so Meta gets its 200 quickly, without the server stopping mid-reply.
+  after(() => processMessage(from, text).catch(console.error))
 
   return new Response('ok', { status: 200 })
 }
@@ -90,9 +96,9 @@ async function processMessage(from: string, text: string) {
   }
 
   // "on J-XXXX" — clock in
-  const onMatch = lower.match(/^on\s+(j-\d+)/i)
+  const onMatch = lower.match(/^on\s+j\s*-?\s*(\d+)/i)
   if (onMatch) {
-    const jobCode = onMatch[1].toUpperCase()
+    const jobCode = `J-${onMatch[1]}`
 
     const { data: job } = await supabase
       .from('jobs')
@@ -114,16 +120,13 @@ async function processMessage(from: string, text: string) {
       .limit(1)
       .single()
 
+    if (open && open.job_id === job.id) {
+      await reply(from, `You're already clocked in to ${jobCode}. Text "off" when you're done.`)
+      return
+    }
     if (open) {
       const prevCode = (open.jobs as unknown as { code: string } | null)?.code ?? 'previous job'
       await supabase.from('time_entries').update({ end_time: new Date().toISOString() }).eq('id', open.id)
-      // Small delay so timestamps differ
-      await new Promise(r => setTimeout(r, 100))
-      if (open.job_id === job.id) {
-        await reply(from, `You're already clocked in to ${jobCode}. Text "off" when you're done.`)
-        return
-      }
-      // Will clock in below and mention the switch
       await reply(from, `Switched from ${prevCode} to ${jobCode} — clocked in ✓`)
     } else {
       const clientHint = job.client_name ? ` (${job.client_name})` : ''

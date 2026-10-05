@@ -3,10 +3,12 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { createServiceClient } from '@/lib/supabase'
 import { redirect } from 'next/navigation'
+import { requireAuth } from '@/lib/auth'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
 
 export async function uploadQuote(formData: FormData) {
+  await requireAuth()
   const file = formData.get('pdf') as File | null
   const clientName = formData.get('client_name') as string
   const address = formData.get('address') as string
@@ -52,7 +54,7 @@ quote_total is the total dollar amount. quoted_hours is estimated labour hours. 
     })
 
     const text = msg.content[0].type === 'text' ? msg.content[0].text.trim() : ''
-    const parsed = JSON.parse(text)
+    const parsed = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1))
     extracted = {
       quote_total: parsed.quote_total ?? null,
       quoted_hours: parsed.quoted_hours ?? null,

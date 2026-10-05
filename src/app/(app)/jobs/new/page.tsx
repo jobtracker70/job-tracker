@@ -21,12 +21,11 @@ export default function NewJobPage() {
   const fileRef = useRef<HTMLInputElement>(null)
 
   return (
-    <main className="min-h-screen bg-gray-950 text-white p-8">
-      <div className="max-w-xl mx-auto">
+    <div className="max-w-xl mx-auto">
         <div className="mb-8">
-          <Link href="/" className="text-gray-400 hover:text-white text-sm">← Back</Link>
-          <h1 className="text-2xl font-bold mt-4">New Job from Quote</h1>
-          <p className="text-gray-400 text-sm mt-1">Upload a PDF quote — Claude will read it and create the job automatically.</p>
+          <Link href="/?tab=waiting" className="text-gray-400 hover:text-white text-sm">← Back</Link>
+          <h1 className="text-2xl font-bold mt-4">Add a Quote</h1>
+          <p className="text-gray-400 text-sm mt-1">Upload a PDF quote. The AI reads it and adds it to &quot;Waiting for decision&quot;, where you accept or reject it.</p>
         </div>
 
         <form action={action} className="space-y-5">
@@ -95,10 +94,9 @@ export default function NewJobPage() {
             disabled={pending}
             className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed py-3 rounded-lg font-semibold transition"
           >
-            {pending ? 'Reading quote…' : 'Create Job'}
+            {pending ? 'Reading quote…' : 'Add quote'}
           </button>
         </form>
-      </div>
-    </main>
+    </div>
   )
 }
