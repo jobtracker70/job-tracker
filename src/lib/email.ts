@@ -49,6 +49,8 @@ export async function checkInbox({ days = 7, timeBudgetMs = 45000 } = {}): Promi
       for (const att of parsed.attachments) {
         const name = att.filename ?? 'attachment'
         if (!isReadableInvoiceType(att.contentType, name)) continue
+        // Skip logos and signature images
+        if (att.contentType.startsWith('image/') && (att.contentDisposition === 'inline' || att.size < 15000)) continue
         try {
           const saved = await processInvoiceFile(
             { name, contentType: att.contentType, data: att.content },
@@ -58,6 +60,22 @@ export async function checkInbox({ days = 7, timeBudgetMs = 45000 } = {}): Promi
         } catch (e) {
           failed = true
           result.errors.push(`${parsed.subject ?? name}: ${e instanceof Error ? e.message : 'failed'}`)
+        }
+      }
+
+      // Some suppliers (e.g. e-receipts) put the receipt in the email text with no attachment.
+      const body = (parsed.text ?? '').trim()
+      if (found === 0 && body.length >= 80) {
+        try {
+          const text = `Subject: ${parsed.subject ?? ''}\nFrom: ${parsed.from?.text ?? ''}\nDate: ${parsed.date?.toISOString() ?? ''}\n\n${body.slice(0, 20000)}`
+          const saved = await processInvoiceFile(
+            { name: `${(parsed.subject ?? 'email').replace(/[^\w .-]/g, '').slice(0, 50) || 'email'}.txt`, contentType: 'text/plain', data: Buffer.from(text) },
+            { source: 'email', emailMessageId: messageId, hint },
+          )
+          if (saved) found++
+        } catch (e) {
+          failed = true
+          result.errors.push(`${parsed.subject ?? 'email'}: ${e instanceof Error ? e.message : 'failed'}`)
         }
       }
 
