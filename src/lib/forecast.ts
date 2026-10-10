@@ -22,6 +22,7 @@ export type JobSummary = {
   variations_total: number
   variation_hours: number
   variation_materials: number
+  entries_to_review: number
 }
 
 export type Health = 'not_started' | 'on_track' | 'behind' | 'over' | 'no_budget' | 'no_dates'

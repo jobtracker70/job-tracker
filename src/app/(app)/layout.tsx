@@ -3,6 +3,7 @@ import { logout } from '../login/actions'
 
 const links = [
   { href: '/', label: 'Jobs' },
+  { href: '/hours', label: 'Hours' },
   { href: '/inbox', label: 'Invoices' },
   { href: '/workers', label: 'Workers' },
 ]
@@ -10,7 +11,7 @@ const links = [
 export default function AppLayout({ children }: { children: React.ReactNode }) {
   return (
     <>
-      <header className="border-b border-gray-800 bg-gray-950/90 sticky top-0 z-10 backdrop-blur">
+      <header className="print:hidden border-b border-gray-800 bg-gray-950/90 sticky top-0 z-10 backdrop-blur">
         <nav className="max-w-5xl mx-auto px-4 h-14 flex items-center gap-1 text-sm whitespace-nowrap overflow-x-auto">
           <Link href="/" className="font-bold mr-3">Job Tracker</Link>
           {links.map((l) => (

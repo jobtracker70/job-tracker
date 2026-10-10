@@ -50,6 +50,7 @@ export async function setJobStatus(jobId: string, status: 'quoted' | 'active' | 
     .update({ status, completed_at: status === 'complete' ? new Date().toISOString() : null })
     .eq('id', jobId)
   done(jobId)
+  if (status === 'complete') redirect(`/jobs/${jobId}/report`)
 }
 
 export async function updateJob(jobId: string, formData: FormData) {

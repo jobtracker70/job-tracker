@@ -13,6 +13,7 @@ type Extracted = {
   supplier_abn: string | null
   invoice_number: string | null
   invoice_date: string | null
+  is_credit: boolean
   total: number | null
   gst: number | null
   job_code: string | null
@@ -38,14 +39,15 @@ Return ONLY valid JSON, no markdown:
   "supplier_abn": "11 digit ABN or null",
   "invoice_number": "string or null",
   "invoice_date": "YYYY-MM-DD or null",
-  "total": number incl GST or null,
-  "gst": number or null,
+  "is_credit": true if this is a credit note, refund or return (money back to the business), else false,
+  "total": total amount INCLUDING GST as a positive number, or null,
+  "gst": the GST amount shown as a positive number; 0 if the document shows no GST,
   "job_code": "one of the listed job codes, or null",
   "category": "materials" (paint, supplies, equipment hire) | "subbie" (labour charged by a subcontractor) | "other",
   "hours": total labour hours billed if this is a subbie invoice, else null,
   "confidence": "high" | "medium" | "low"
 }
-Statements, quotes, marketing and remittance advice are NOT invoices.`
+Statements, quotes, marketing and remittance advice are NOT invoices. Credit notes, refund receipts and return receipts DO count (set is_credit true).`
 
 function contentFor(file: InvoiceFile, codes: string[], hint?: string): Anthropic.Messages.ContentBlockParam[] {
   const ct = file.contentType.toLowerCase()
@@ -97,11 +99,23 @@ function findJobInText(jobs: JobRef[], text: string | null | undefined) {
 
 const digits = (s: string | null | undefined) => (s ?? '').replace(/\D/g, '')
 
+const SUBBIE_TYPES = ['subbie', 'subbie_fixed']
+
+export type SavedInvoice = {
+  id: string
+  status: string
+  job_id: string | null
+  supplier: string | null
+  total: number
+  duplicate: boolean
+}
+
 // Reads one file and saves it as an expense. Returns null if it isn't an invoice.
+// An exact repeat (same supplier, invoice number and amount) is not saved again: it comes back with duplicate = true.
 export async function processInvoiceFile(
   file: InvoiceFile,
-  opts: { source: 'email' | 'upload'; emailMessageId?: string; hint?: string; jobId?: string },
-) {
+  opts: { source: 'email' | 'upload' | 'whatsapp'; emailMessageId?: string; hint?: string; jobId?: string; submittedBy?: string },
+): Promise<SavedInvoice | null> {
   const supabase = createServiceClient()
   const { data: jobRows } = await supabase.from('jobs').select('id, code').neq('status', 'rejected')
   const jobs = (jobRows ?? []) as JobRef[]
@@ -109,11 +123,38 @@ export async function processInvoiceFile(
   const x = await extractInvoice(file, jobs.map((j) => j.code), opts.hint)
   if (!x || !x.is_invoice || x.total == null) return null
 
+  // Credits reduce the job's cost
+  const sign = x.is_credit ? -1 : 1
+  const total = sign * Math.abs(Number(x.total))
+  const gst = x.gst == null ? null : sign * Math.abs(Number(x.gst))
+
+  // Duplicate check: same amount, then same supplier, then same invoice number (or same date if no number)
+  const { data: sameAmount } = await supabase
+    .from('expenses')
+    .select('id, status, job_id, supplier, invoice_number, expense_date, total')
+    .eq('total', total)
+    .neq('status', 'rejected')
+  const sameSupplier = (sameAmount ?? []).filter((e) => {
+    const a = compactCode(e.supplier)
+    const b = compactCode(x.supplier)
+    return a && b && (a === b || a.includes(b) || b.includes(a))
+  })
+  const exact = sameSupplier.find(
+    (e) => x.invoice_number && e.invoice_number && compactCode(e.invoice_number) === compactCode(x.invoice_number),
+  )
+  if (exact) {
+    return { id: exact.id, status: exact.status, job_id: exact.job_id, supplier: exact.supplier, total, duplicate: true }
+  }
+  const possibleDuplicate = sameSupplier.some(
+    (e) => (!x.invoice_number || !e.invoice_number) && x.invoice_date && e.expense_date === x.invoice_date,
+  )
+
   const jobId = opts.jobId ?? (findJobByCode(jobs, x.job_code) ?? findJobInText(jobs, opts.hint))?.id ?? null
 
   let workerId: string | null = null
+  let fixedPrice = false
   if (x.category === 'subbie') {
-    const { data: subbies } = await supabase.from('workers').select('id, name, abn').eq('type', 'subbie')
+    const { data: subbies } = await supabase.from('workers').select('id, name, abn, type').in('type', SUBBIE_TYPES)
     const abn = digits(x.supplier_abn)
     const supplier = (x.supplier ?? '').toLowerCase()
     const match = (subbies ?? []).find(
@@ -123,14 +164,16 @@ export async function processInvoiceFile(
           (supplier.includes(s.name.toLowerCase()) || s.name.toLowerCase().includes(supplier))),
     )
     workerId = match?.id ?? null
+    fixedPrice = match?.type === 'subbie_fixed'
   }
 
   const path = `${Date.now()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`
   const { error: uploadError } = await supabase.storage.from('invoices').upload(path, file.data, { contentType: file.contentType })
 
   const confident = x.confidence !== 'low'
-  const subbieOk = x.category !== 'subbie' || (workerId != null && x.hours != null)
-  const status = jobId && confident && subbieOk ? 'approved' : 'pending'
+  // Hourly subbies must show hours so they can be checked against WhatsApp sign-ins; fixed-price subbies don't.
+  const subbieOk = x.category !== 'subbie' || (workerId != null && (fixedPrice || x.hours != null))
+  const status = jobId && confident && subbieOk && !possibleDuplicate ? 'approved' : 'pending'
 
   const { data, error } = await supabase
     .from('expenses')
@@ -139,8 +182,9 @@ export async function processInvoiceFile(
       supplier: x.supplier,
       supplier_abn: x.supplier_abn,
       invoice_number: x.invoice_number,
-      total: x.total,
-      gst: x.gst,
+      total,
+      gst,
+      is_credit: !!x.is_credit,
       expense_date: x.invoice_date,
       category: ['materials', 'subbie', 'other'].includes(x.category) ? x.category : 'other',
       hours: x.hours,
@@ -150,12 +194,14 @@ export async function processInvoiceFile(
       status,
       source: opts.source,
       email_message_id: opts.emailMessageId ?? null,
+      submitted_by: opts.submittedBy ?? null,
+      note: possibleDuplicate ? 'Possible duplicate: same supplier, amount and date as an invoice already added.' : null,
       file_name: file.name,
       image_path: uploadError ? null : path,
       extraction_json: x,
     })
-    .select('id, status')
+    .select('id, status, job_id, supplier, total')
     .single()
   if (error) throw new Error(error.message)
-  return data
+  return { ...data, total: Number(data.total), duplicate: false }
 }

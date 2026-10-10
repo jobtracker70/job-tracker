@@ -24,6 +24,7 @@ export async function uploadInvoice(_prev: string | null, formData: FormData) {
     )
     refresh()
     if (!saved) return "That doesn't look like an invoice, so nothing was added."
+    if (saved.duplicate) return 'Already added before — not counted twice.'
     return saved.status === 'approved' ? '✓ Added to the job automatically.' : '✓ Added — check it below.'
   } catch (e) {
     return e instanceof Error ? e.message : 'Something went wrong'
@@ -56,6 +57,8 @@ export async function approveExpense(expenseId: string, formData: FormData) {
       worker_id: category === 'subbie' ? text(formData.get('worker_id')) : null,
       hours: category === 'subbie' ? num(formData.get('hours')) : null,
       total: num(formData.get('total')) ?? undefined,
+      gst: num(formData.get('gst')),
+      note: null,
       status: jobId ? 'approved' : 'pending',
     })
     .eq('id', expenseId)

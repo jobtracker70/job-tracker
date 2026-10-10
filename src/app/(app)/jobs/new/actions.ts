@@ -50,7 +50,9 @@ export async function uploadQuote(formData: FormData) {
   "quoted_materials": number or null,
   "po_ref": "string or null"
 }
-quote_total is the total dollar amount. quoted_hours is estimated labour hours. quoted_materials is estimated materials cost. po_ref is any purchase order number.`,
+The business is GST-registered, so all dollar amounts must be EXCLUDING GST.
+quote_total is the quote price excluding GST (use the subtotal before GST; if only a GST-inclusive total is shown, divide it by 1.1).
+quoted_hours is the estimated labour hours. quoted_materials is the estimated materials cost excluding GST. po_ref is any purchase order number.`,
             },
           ],
         },

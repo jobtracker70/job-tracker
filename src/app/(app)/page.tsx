@@ -25,20 +25,18 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ t
   const tab = TABS.find((t) => t.key === tabParam) ?? TABS[0]
   const supabase = createServiceClient()
 
-  const [{ data: jobsData }, { data: weekEntries }, { count: toCheck }] = await Promise.all([
+  const [{ data: jobsData }, { data: weekEntries }, { count: toCheck }, { count: hoursToCheck }] = await Promise.all([
     supabase.from('job_summary').select('*').order('created_at', { ascending: false }),
-    supabase.from('time_entries').select('start_time, end_time').gte('start_time', sydneyMidnightISO(mondayThisWeek())),
+    supabase.from('time_entry_costs').select('paid_hours').gte('start_time', sydneyMidnightISO(mondayThisWeek())),
     supabase.from('expenses').select('*', { count: 'exact', head: true }).eq('status', 'pending'),
+    supabase.from('time_entries').select('*', { count: 'exact', head: true }).eq('needs_review', true),
   ])
 
   const jobs = (jobsData ?? []) as JobSummary[]
   const counts = Object.fromEntries(TABS.map((t) => [t.key, jobs.filter((j) => (t.statuses as readonly string[]).includes(j.status)).length]))
   const shown = jobs.filter((j) => (tab.statuses as readonly string[]).includes(j.status))
 
-  const weekHours = (weekEntries ?? []).reduce((sum, e) => {
-    const end = e.end_time ? new Date(e.end_time) : new Date()
-    return sum + (end.getTime() - new Date(e.start_time).getTime()) / 3600000
-  }, 0)
+  const weekHours = (weekEntries ?? []).reduce((sum, e) => sum + Number(e.paid_hours), 0)
 
   const activeHealth = jobs
     .filter((j) => j.status === 'active')
@@ -47,7 +45,7 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ t
 
   return (
     <div>
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
         <Stat label="Active jobs" value={String(counts.active)} />
         <Stat label="Hours logged this week" value={weekHours > 0 ? hrs(weekHours) : '—'} />
         <Stat
@@ -56,6 +54,9 @@ export default async function Home({ searchParams }: { searchParams: Promise<{ t
           tone={needsAttention ? 'red' : undefined}
           sub={needsAttention ? 'over or using hours too fast' : 'all on track'}
         />
+        <Link href="/hours">
+          <Stat label="Hours to check" value={String(hoursToCheck ?? 0)} tone={hoursToCheck ? 'red' : undefined} sub="forgotten sign-outs" />
+        </Link>
         <Link href="/inbox">
           <Stat label="Invoices to check" value={String(toCheck ?? 0)} tone={toCheck ? 'yellow' : undefined} sub="tap to review" />
         </Link>
