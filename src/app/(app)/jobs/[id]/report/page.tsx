@@ -102,7 +102,13 @@ export default async function JobReportPage({ params }: { params: Promise<{ id: 
 
   // ---------- Findings ----------
   const findings: { tone: 'good' | 'bad' | 'info'; text: string }[] = []
-  if (hoursDiff != null && hoursBudget) {
+  if (hoursDiff != null && hoursBudget && !finished) {
+    findings.push(
+      hoursDiff > 0.5
+        ? { tone: 'bad', text: `Already ${hrs(hoursDiff)} over the ${hrs(hoursBudget)} quoted, and the job isn't finished.` }
+        : { tone: 'info', text: `So far ${hrs(hoursUsed)} of the ${hrs(hoursBudget)} quoted hours used (${Math.round((hoursUsed / hoursBudget) * 100)}%).` },
+    )
+  } else if (hoursDiff != null && hoursBudget) {
     if (hoursDiff > 0.5) {
       findings.push({
         tone: 'bad',
@@ -116,7 +122,13 @@ export default async function JobReportPage({ params }: { params: Promise<{ id: 
   } else {
     findings.push({ tone: 'info', text: 'No labour hours on the quote, so hours can’t be compared. Add quoted hours under "Edit job details".' })
   }
-  if (materialsDiff != null && materialsBudget) {
+  if (materialsDiff != null && materialsBudget && !finished) {
+    findings.push(
+      materialsDiff > 1
+        ? { tone: 'bad', text: `Materials already ${money(materialsDiff)} over the quote.` }
+        : { tone: 'info', text: `So far ${money(nums.materialsCost)} of the ${money(materialsBudget)} materials budget spent.` },
+    )
+  } else if (materialsDiff != null && materialsBudget) {
     if (materialsDiff > 1) findings.push({ tone: 'bad', text: `Materials cost ${money(materialsDiff)} (${pct(materialsDiffPct)}) more than quoted.` })
     else if (materialsDiff < -1) findings.push({ tone: 'good', text: `Materials came in ${money(-materialsDiff)} (${pct(materialsDiffPct)}) under the quote.` })
     else findings.push({ tone: 'good', text: 'Materials came in on the quote.' })
@@ -141,7 +153,7 @@ export default async function JobReportPage({ params }: { params: Promise<{ id: 
   if (margin != null) {
     findings.push({
       tone: margin >= 0.3 ? 'good' : margin >= 0.15 ? 'info' : 'bad',
-      text: `Final margin ${Math.round(margin * 100)}%${expectedMargin != null ? ` (would have been ${Math.round(expectedMargin * 100)}% if it ran exactly to quote)` : ''}.`,
+      text: `${finished ? 'Final margin' : 'Margin so far'} ${Math.round(margin * 100)}%${expectedMargin != null ? ` (would have been ${Math.round(expectedMargin * 100)}% if it ran exactly to quote)` : ''}.`,
     })
   }
 
@@ -170,7 +182,7 @@ export default async function JobReportPage({ params }: { params: Promise<{ id: 
         <Box label="Total cost" value={money(totalCost)} sub={`Labour ${money(employeeCost)} · Subbies ${money(subbieCost)} · Materials ${money(nums.materialsCost)}`} />
         <Box label="Profit" value={money(profit)} tone={profit >= 0 ? 'green' : 'red'} sub={expectedProfit != null ? `${signedMoney(profit - expectedProfit)} vs quote` : undefined} />
         <Box
-          label="Margin"
+          label={finished ? 'Margin' : 'Margin so far'}
           value={margin == null ? '—' : `${Math.round(margin * 100)}%`}
           tone={margin == null ? undefined : margin >= 0.3 ? 'green' : margin >= 0.15 ? 'yellow' : 'red'}
           sub={expectedMargin != null ? `${Math.round(expectedMargin * 100)}% if run to quote` : undefined}
@@ -187,7 +199,7 @@ export default async function JobReportPage({ params }: { params: Promise<{ id: 
             </li>
           ))}
         </ul>
-        {hoursUsed > 0 && (
+        {finished && hoursUsed > 0 && (
           <p className="mt-4 text-sm bg-blue-900/20 border border-blue-900 rounded-lg px-4 py-3 text-blue-200">
             <strong>Quoting tip:</strong> this job actually took <strong>{hrs(hoursUsed)}</strong> of labour
             {nums.materialsCost > 0 && <> and <strong>{money(nums.materialsCost)}</strong> of materials</>}
