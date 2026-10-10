@@ -1,7 +1,8 @@
 import { createServiceClient } from '@/lib/supabase'
 import { fmtDate, money, todaySydney } from '@/lib/format'
 import { Card, Empty, SectionTitle, inputClass, secondaryButtonClass } from '@/components/ui'
-import { AddWorkerForm, RateFields, WORKER_TYPES } from './add-worker-form'
+import { AddWorkerForm, RateFields } from './add-worker-form'
+import { WORKER_TYPES } from '@/lib/workers'
 import { setActive, setRate, updateWorker } from './actions'
 
 export const dynamic = 'force-dynamic'

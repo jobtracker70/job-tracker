@@ -3,13 +3,8 @@
 import { useActionState, useState } from 'react'
 import { addWorker } from './actions'
 import { buttonClass, inputClass } from '@/components/ui'
+import { WORKER_TYPES } from '@/lib/workers'
 
-export const WORKER_TYPES = [
-  { value: 'employee', label: 'Employee' },
-  { value: 'apprentice', label: 'Apprentice' },
-  { value: 'subbie', label: 'Subbie — hourly (sends invoices with hours)' },
-  { value: 'subbie_fixed', label: 'Subbie — fixed price (per job / per m²)' },
-]
 
 export function RateFields({ type, defaults }: { type: string; defaults?: { oncost?: number; overtimeAfter?: number } }) {
   const subbie = type === 'subbie' || type === 'subbie_fixed'
