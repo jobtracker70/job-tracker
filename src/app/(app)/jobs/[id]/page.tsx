@@ -20,8 +20,9 @@ type Expense = {
 const entryHours = (e: Entry) =>
   ((e.end_time ? new Date(e.end_time) : new Date()).getTime() - new Date(e.start_time).getTime()) / 3600000
 
-export default async function JobPage({ params }: { params: Promise<{ id: string }> }) {
+export default async function JobPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ codeError?: string }> }) {
   const { id } = await params
+  const { codeError } = await searchParams
   const supabase = createServiceClient()
 
   const [{ data: summary }, { data: job }, { data: entriesData }, { data: expensesData }, { data: variations }, { data: subbies }] =
@@ -69,6 +70,14 @@ export default async function JobPage({ params }: { params: Promise<{ id: string
 
   return (
     <div className="space-y-8">
+      {codeError && (
+        <div className="bg-red-900/30 border border-red-700 rounded-lg px-4 py-3 text-red-300 text-sm">
+          {codeError === 'used'
+            ? 'That job code is already used by another job. Nothing was saved. Pick a different code.'
+            : 'The job code must be 2–24 letters, numbers or dashes. Nothing was saved.'}
+        </div>
+      )}
+
       {/* Header */}
       <div>
         <Link href="/" className="text-gray-400 hover:text-white text-sm">← All jobs</Link>
@@ -294,7 +303,7 @@ export default async function JobPage({ params }: { params: Promise<{ id: string
       <section>
         <SectionTitle>Labour log</SectionTitle>
         {!entries.length ? (
-          <Empty>No clock-ins yet. Workers WhatsApp &quot;on {j.code}&quot; to start.</Empty>
+          <Empty>No clock-ins yet. Workers sign in on WhatsApp and pick this job from the list.</Empty>
         ) : (
           <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-x-auto">
             <table className="w-full text-sm">
@@ -363,6 +372,7 @@ export default async function JobPage({ params }: { params: Promise<{ id: string
       <details className="bg-gray-900 border border-gray-800 rounded-xl">
         <summary className="px-5 py-4 cursor-pointer font-semibold">Edit job details</summary>
         <form action={updateJob.bind(null, id)} className="grid md:grid-cols-2 gap-3 px-5 pb-5">
+          <Field label="Job code (changing it affects how new invoices match)" name="code" defaultValue={j.code} />
           <Field label="Client" name="client_name" defaultValue={j.client_name} />
           <Field label="Address" name="address" defaultValue={j.address} />
           <Field label="Quote total ($)" name="quote_total" defaultValue={j.quote_total} />

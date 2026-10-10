@@ -3,7 +3,8 @@
 import { revalidatePath } from 'next/cache'
 import { requireAuth } from '@/lib/auth'
 import { createServiceClient } from '@/lib/supabase'
-import { addWorkingDays, num, text } from '@/lib/format'
+import { redirect } from 'next/navigation'
+import { addWorkingDays, cleanJobCode, num, text } from '@/lib/format'
 
 function done(jobId: string) {
   revalidatePath(`/jobs/${jobId}`)
@@ -53,9 +54,12 @@ export async function setJobStatus(jobId: string, status: 'quoted' | 'active' | 
 
 export async function updateJob(jobId: string, formData: FormData) {
   await requireAuth()
-  await createServiceClient()
+  const code = cleanJobCode(formData.get('code'))
+  if (!code) redirect(`/jobs/${jobId}?codeError=invalid`)
+  const { error } = await createServiceClient()
     .from('jobs')
     .update({
+      code,
       client_name: text(formData.get('client_name')),
       address: text(formData.get('address')),
       quote_total: num(formData.get('quote_total')),
@@ -65,6 +69,7 @@ export async function updateJob(jobId: string, formData: FormData) {
       planned_finish: text(formData.get('planned_finish')),
     })
     .eq('id', jobId)
+  if (error) redirect(`/jobs/${jobId}?codeError=${error.code === '23505' ? 'used' : 'invalid'}`)
   done(jobId)
 }
 

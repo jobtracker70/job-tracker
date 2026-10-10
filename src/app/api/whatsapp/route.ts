@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import { createServiceClient } from '@/lib/supabase'
+import { compactCode } from '@/lib/format'
 import { NextRequest, after } from 'next/server'
 
 const VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN!
@@ -120,8 +121,8 @@ async function processMessage(from: string, input: Input) {
   const lower = input.value.toLowerCase()
   if (['off', 'clock off', 'out', 'sign out', 'signout'].includes(lower)) return signOut(supabase, from, worker)
 
-  const onMatch = lower.match(/^on\s+j\s*-?\s*(\d+)/)
-  if (onMatch) return signIn(supabase, from, worker, { code: `J-${onMatch[1]}` })
+  const onMatch = input.value.match(/^on\s+(\S.*)$/i)
+  if (onMatch) return signIn(supabase, from, worker, { code: onMatch[1].trim() })
 
   if (['status', 'where am i', '?'].includes(lower)) {
     const open = await getOpenEntry(supabase, worker.id)
@@ -162,7 +163,7 @@ async function sendJobList(supabase: Supabase, from: string, worker: Worker) {
   }
 
   const shown = jobs.slice(0, 10)
-  const more = jobs.length > 10 ? `\n(Showing the 10 newest. For another job, type "on" and its code, e.g. on J-1001.)` : ''
+  const more = jobs.length > 10 ? `\n(Showing the 10 newest. For another job, type "on" and its job code.)` : ''
   await sendList(
     from,
     `Which job site are you on, ${firstName(worker)}?${more}`,
@@ -176,8 +177,10 @@ async function sendJobList(supabase: Supabase, from: string, worker: Worker) {
 }
 
 async function signIn(supabase: Supabase, from: string, worker: Worker, which: { id: string } | { code: string }) {
-  const query = supabase.from('jobs').select('id, code, client_name, status')
-  const { data: job } = await ('id' in which ? query.eq('id', which.id) : query.eq('code', which.code)).maybeSingle()
+  const { data: jobRows } = await supabase.from('jobs').select('id, code, client_name, status')
+  const job = 'id' in which
+    ? jobRows?.find((j) => j.id === which.id)
+    : jobRows?.find((j) => compactCode(j.code) === compactCode(which.code))
 
   if (!job) {
     await reply(from, `I couldn't find that job. Tap "Sign in" to see the active jobs.`)

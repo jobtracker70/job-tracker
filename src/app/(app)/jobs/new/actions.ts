@@ -4,6 +4,7 @@ import Anthropic from '@anthropic-ai/sdk'
 import { createServiceClient } from '@/lib/supabase'
 import { redirect } from 'next/navigation'
 import { requireAuth } from '@/lib/auth'
+import { cleanJobCode } from '@/lib/format'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
 
@@ -12,6 +13,9 @@ export async function uploadQuote(formData: FormData) {
   const file = formData.get('pdf') as File | null
   const clientName = formData.get('client_name') as string
   const address = formData.get('address') as string
+  const rawCode = String(formData.get('job_code') ?? '').trim()
+  const jobCode = cleanJobCode(rawCode)
+  if (rawCode && !jobCode) throw new Error('Job code: use 2–24 letters, numbers or dashes, e.g. SMITH-PENRITH')
 
   if (!file || file.size === 0) {
     throw new Error('No PDF uploaded')
@@ -79,11 +83,11 @@ quote_total is the total dollar amount. quoted_hours is estimated labour hours. 
     pdfPath = fileName
   }
 
-  // Create the job (code auto-assigned by trigger)
+  // Create the job (blank code = the database picks the next J-number)
   const { data: job, error } = await supabase
     .from('jobs')
     .insert({
-      code: '',
+      code: jobCode ?? '',
       client_name: extracted.client_name,
       address: extracted.address,
       quote_total: extracted.quote_total,
@@ -95,7 +99,7 @@ quote_total is the total dollar amount. quoted_hours is estimated labour hours. 
     .select('id')
     .single()
 
-  if (error) throw new Error(error.message)
+  if (error) throw new Error(error.code === '23505' ? `The job code "${jobCode}" is already used. Pick another.` : error.message)
 
   redirect(`/jobs/${job.id}`)
 }

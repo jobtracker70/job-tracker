@@ -95,3 +95,13 @@ export function phoneE164(input: string) {
   if (digits.startsWith('0')) return `+61${digits.slice(1)}`
   return `+${digits}`
 }
+
+// Job codes are chosen by the owner, e.g. "SMITH-PENRITH". Letters, numbers and dashes only, stored in capitals.
+export function cleanJobCode(input: FormDataEntryValue | string | null): string | null {
+  const raw = input == null ? '' : String(input)
+  const code = raw.trim().toUpperCase().replace(/[\s_]+/g, '-').replace(/[^A-Z0-9-]/g, '').replace(/-+/g, '-').replace(/^-|-$/g, '')
+  return code.length >= 2 && code.length <= 24 ? code : null
+}
+
+// Compare codes ignoring case, dashes and spaces ("smith penrith" == "SMITH-PENRITH").
+export const compactCode = (s: string | null | undefined) => (s ?? '').toUpperCase().replace(/[^A-Z0-9]/g, '')

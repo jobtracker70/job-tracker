@@ -58,6 +58,23 @@ export default function NewJobPage() {
             </div>
           </div>
 
+          {/* Job code */}
+          <div>
+            <label className="block text-sm font-medium text-gray-300 mb-1">
+              Job code <span className="text-gray-500">(you choose it — leave blank and one is made for you)</span>
+            </label>
+            <input
+              type="text"
+              name="job_code"
+              placeholder="e.g. SMITH-PENRITH"
+              maxLength={24}
+              className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 text-white placeholder-gray-500 uppercase focus:outline-none focus:border-blue-500"
+            />
+            <p className="text-gray-500 text-xs mt-1">
+              Subbies and suppliers put this code on their invoices, and workers see it in WhatsApp. Letters, numbers and dashes.
+            </p>
+          </div>
+
           {/* Optional overrides */}
           <div>
             <label className="block text-sm font-medium text-gray-300 mb-1">

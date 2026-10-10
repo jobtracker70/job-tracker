@@ -1,5 +1,6 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { createServiceClient } from './supabase'
+import { compactCode } from './format'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
 const MODEL = 'claude-sonnet-5-5'
@@ -27,8 +28,9 @@ export function isReadableInvoiceType(contentType: string, name: string) {
   return ct === 'application/pdf' || (IMAGE_TYPES as readonly string[]).includes(ct) || ct.includes('csv') || /\.(pdf|csv)$/i.test(name)
 }
 
-const PROMPT = `You are reading a document sent to a NSW painting business. Decide if it is a supplier invoice/receipt or a subcontractor ("subbie") invoice, and extract details.
-Job codes look like "J-1001" (sometimes written J1001, Job 1001, or in a PO / reference / description field).
+const promptFor = (codes: string[]) => `You are reading a document sent to a NSW painting business. Decide if it is a supplier invoice/receipt or a subcontractor ("subbie") invoice, and extract details.
+The business gives every job its own job code. The current job codes are: ${codes.length ? codes.slice(0, 150).join(', ') : '(none yet)'}.
+Look anywhere in the document (reference, PO number, description, notes) for one of those codes, and return it exactly as listed. If none appears, return null.
 Return ONLY valid JSON, no markdown:
 {
   "is_invoice": true/false,
@@ -38,14 +40,14 @@ Return ONLY valid JSON, no markdown:
   "invoice_date": "YYYY-MM-DD or null",
   "total": number incl GST or null,
   "gst": number or null,
-  "job_code": "J-1234 or null",
+  "job_code": "one of the listed job codes, or null",
   "category": "materials" (paint, supplies, equipment hire) | "subbie" (labour charged by a subcontractor) | "other",
   "hours": total labour hours billed if this is a subbie invoice, else null,
   "confidence": "high" | "medium" | "low"
 }
 Statements, quotes, marketing and remittance advice are NOT invoices.`
 
-function contentFor(file: InvoiceFile, hint?: string): Anthropic.Messages.ContentBlockParam[] {
+function contentFor(file: InvoiceFile, codes: string[], hint?: string): Anthropic.Messages.ContentBlockParam[] {
   const ct = file.contentType.toLowerCase()
   const blocks: Anthropic.Messages.ContentBlockParam[] = []
   if (ct === 'application/pdf' || /\.pdf$/i.test(file.name)) {
@@ -55,15 +57,16 @@ function contentFor(file: InvoiceFile, hint?: string): Anthropic.Messages.Conten
   } else {
     blocks.push({ type: 'text', text: `File "${file.name}":\n${file.data.toString('utf8').slice(0, 60000)}` })
   }
-  blocks.push({ type: 'text', text: hint ? `${PROMPT}\n\nThe email it came with (may contain the job code):\n${hint.slice(0, 3000)}` : PROMPT })
+  const prompt = promptFor(codes)
+  blocks.push({ type: 'text', text: hint ? `${prompt}\n\nThe email it came with (may contain the job code):\n${hint.slice(0, 3000)}` : prompt })
   return blocks
 }
 
-export async function extractInvoice(file: InvoiceFile, hint?: string): Promise<Extracted | null> {
+export async function extractInvoice(file: InvoiceFile, codes: string[], hint?: string): Promise<Extracted | null> {
   const msg = await anthropic.messages.create({
     model: MODEL,
     max_tokens: 1024,
-    messages: [{ role: 'user', content: contentFor(file, hint) }],
+    messages: [{ role: 'user', content: contentFor(file, codes, hint) }],
   })
   const t = msg.content.find((c) => c.type === 'text')
   if (!t || t.type !== 'text') return null
@@ -74,9 +77,22 @@ export async function extractInvoice(file: InvoiceFile, hint?: string): Promise<
   }
 }
 
-export function normaliseJobCode(s: string | null | undefined) {
-  const m = s?.match(/\bJ(?:OB)?[\s#-]*(\d{4,})\b/i)
-  return m ? `J-${m[1]}` : null
+type JobRef = { id: string; code: string }
+
+function findJobByCode(jobs: JobRef[], raw: string | null | undefined) {
+  const c = compactCode(raw)
+  return c ? jobs.find((j) => compactCode(j.code) === c) ?? null : null
+}
+
+// Looks for any known job code as a whole word in free text (e.g. the email subject or body).
+function findJobInText(jobs: JobRef[], text: string | null | undefined) {
+  const up = (text ?? '').toUpperCase()
+  if (!up) return null
+  for (const j of [...jobs].sort((x, y) => y.code.length - x.code.length)) {
+    const esc = j.code.toUpperCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    if (new RegExp(`(?<![A-Z0-9])${esc}(?![A-Z0-9])`).test(up)) return j
+  }
+  return null
 }
 
 const digits = (s: string | null | undefined) => (s ?? '').replace(/\D/g, '')
@@ -86,17 +102,14 @@ export async function processInvoiceFile(
   file: InvoiceFile,
   opts: { source: 'email' | 'upload'; emailMessageId?: string; hint?: string; jobId?: string },
 ) {
-  const x = await extractInvoice(file, opts.hint)
+  const supabase = createServiceClient()
+  const { data: jobRows } = await supabase.from('jobs').select('id, code').neq('status', 'rejected')
+  const jobs = (jobRows ?? []) as JobRef[]
+
+  const x = await extractInvoice(file, jobs.map((j) => j.code), opts.hint)
   if (!x || !x.is_invoice || x.total == null) return null
 
-  const supabase = createServiceClient()
-  const code = normaliseJobCode(x.job_code) ?? normaliseJobCode(opts.hint)
-
-  let jobId = opts.jobId ?? null
-  if (!jobId && code) {
-    const { data: job } = await supabase.from('jobs').select('id').eq('code', code).maybeSingle()
-    jobId = job?.id ?? null
-  }
+  const jobId = opts.jobId ?? (findJobByCode(jobs, x.job_code) ?? findJobInText(jobs, opts.hint))?.id ?? null
 
   let workerId: string | null = null
   if (x.category === 'subbie') {
