@@ -1,3 +1,4 @@
+import { createHmac, timingSafeEqual } from 'node:crypto'
 import { createServiceClient } from '@/lib/supabase'
 import { NextRequest, after } from 'next/server'
 
@@ -25,7 +26,26 @@ export async function GET(req: NextRequest) {
 
 // Incoming WhatsApp messages and button/list taps
 export async function POST(req: NextRequest) {
-  const body = await req.json()
+  const raw = await req.text()
+
+  // Meta signs every real webhook with the app secret. Once WHATSAPP_APP_SECRET is set, reject anything unsigned or forged.
+  const appSecret = process.env.WHATSAPP_APP_SECRET
+  if (appSecret) {
+    const expected = Buffer.from('sha256=' + createHmac('sha256', appSecret).update(raw).digest('hex'))
+    const given = Buffer.from(req.headers.get('x-hub-signature-256') ?? '')
+    if (given.length !== expected.length || !timingSafeEqual(given, expected)) {
+      return new Response('Invalid signature', { status: 401 })
+    }
+  } else {
+    console.warn('WHATSAPP_APP_SECRET is not set: webhook signatures are not being checked')
+  }
+
+  let body
+  try {
+    body = JSON.parse(raw)
+  } catch {
+    return new Response('Bad request', { status: 400 })
+  }
   const msg = body?.entry?.[0]?.changes?.[0]?.value?.messages?.[0]
   if (!msg) return new Response('ok', { status: 200 })
 
