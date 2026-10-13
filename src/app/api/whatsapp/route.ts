@@ -15,7 +15,7 @@ type Media = { id: string; mime: string; filename?: string; caption?: string }
 type Input = { kind: 'text'; value: string } | { kind: 'action'; id: string } | { kind: 'media'; media: Media }
 type Supabase = ReturnType<typeof createServiceClient>
 type Worker = { id: string; name: string; break_minutes: number }
-type OpenEntry = { id: string; job_id: string; start_time: string; jobs: { code: string; client_name: string | null } | null }
+type OpenEntry = { id: string; job_id: string; start_time: string; jobs: { code: string; client_name: string | null; address: string | null } | null }
 
 // Meta webhook verification
 export async function GET(req: NextRequest) {
@@ -88,7 +88,7 @@ export async function POST(req: NextRequest) {
 async function getOpenEntry(supabase: Supabase, workerId: string) {
   const { data } = await supabase
     .from('time_entries')
-    .select('id, job_id, start_time, jobs(code, client_name)')
+    .select('id, job_id, start_time, jobs(code, client_name, address)')
     .eq('worker_id', workerId)
     .is('end_time', null)
     .order('start_time', { ascending: false })
@@ -100,7 +100,8 @@ async function getOpenEntry(supabase: Supabase, workerId: string) {
 const hoursSince = (iso: string) => ((Date.now() - new Date(iso).getTime()) / 3600000).toFixed(1)
 const firstName = (w: Worker) => w.name.split(' ')[0]
 const fmtH = (h: number) => (Math.round(h * 10) / 10).toString()
-const COMMANDS = ['hi', 'hello', 'hey', 'menu', 'sign in', 'signin', 'in', 'start', 'on', 'off', 'out', 'sign out', 'signout', 'clock off', 'status', '?', 'where am i']
+const CHANGE_HOURS = ['change hours', 'change hour', 'change', 'fix hours', 'fix hour', 'fix', 'hours', 'edit hours']
+const COMMANDS = ['hi', 'hello', 'hey', 'menu', 'sign in', 'signin', 'in', 'start', 'on', 'off', 'out', 'sign out', 'signout', 'clock off', 'status', '?', 'where am i', ...CHANGE_HOURS]
 
 async function processMessage(from: string, input: Input) {
   const phone = from.startsWith('+') ? from : `+${from}`
@@ -135,10 +136,6 @@ async function processMessage(from: string, input: Input) {
     if (input.id === 'missed') return sendMissedJobList(supabase, from, worker)
     if (input.id.startsWith('miss:')) return askMissedHours(supabase, from, worker, input.id.slice(5))
     if (input.id.startsWith('job:')) return signIn(supabase, from, worker, { id: input.id.slice(4) })
-    if (input.id.startsWith('rcpt:')) {
-      const [, expenseId, jobId] = input.id.split(':')
-      return assignReceipt(supabase, from, worker, expenseId, jobId)
-    }
     return sendMenu(supabase, from, worker)
   }
 
@@ -170,29 +167,27 @@ async function processMessage(from: string, input: Input) {
 
   if (['sign in', 'signin', 'in', 'start', 'on'].includes(lower)) return sendJobList(supabase, from, worker)
 
+  if (CHANGE_HOURS.includes(lower)) {
+    await sendButtons(from, `What do you need to change, ${firstName(worker)}?`, [
+      { id: 'finished_earlier', title: 'Change finish time' },
+      { id: 'missed', title: 'Add missed hours' },
+    ])
+    return
+  }
+
   // Anything else (hi, hello…) shows the menu
   return sendMenu(supabase, from, worker)
 }
 
-const RECEIPT_TIP = '📷 Bought materials? Send a photo of the receipt here.'
-
 async function sendMenu(supabase: Supabase, from: string, worker: Worker) {
   const open = await getOpenEntry(supabase, worker.id)
   if (!open) {
-    await sendButtons(from, `Hi ${firstName(worker)}! Ready to start?\n\n${RECEIPT_TIP}`, [
-      { id: 'signin', title: 'Sign in' },
-      { id: 'missed', title: 'Add missed hours' },
-    ])
+    await sendButtons(from, `Hi ${firstName(worker)}! Ready to start?`, [{ id: 'signin', title: 'Sign in' }])
   } else {
-    await sendButtons(
-      from,
-      `Hi ${firstName(worker)}! You're on ${open.jobs?.code ?? 'a job'} (${hoursSince(open.start_time)}h so far).\n\n${RECEIPT_TIP}`,
-      [
-        { id: 'signout', title: 'Sign out' },
-        { id: 'finished_earlier', title: 'Finished earlier' },
-        { id: 'signin', title: 'Switch job' },
-      ],
-    )
+    await sendButtons(from, `Hi ${firstName(worker)}! You're at ${open.jobs?.address ?? open.jobs?.code ?? 'a job'} (${hoursSince(open.start_time)}h so far).`, [
+      { id: 'signout', title: 'Sign out' },
+      { id: 'signin', title: 'Switch job' },
+    ])
   }
 }
 
@@ -206,10 +201,13 @@ async function activeJobs(supabase: Supabase) {
   return data ?? []
 }
 
+// Workers know sites by address, so the address is the big line and the code/client sit underneath
 const jobRow = (j: { code: string; client_name: string | null; address: string | null }) => ({
-  title: `${j.code} ${j.client_name ?? ''}`.trim().slice(0, 24),
-  description: (j.address ?? j.client_name ?? '').slice(0, 72) || undefined,
+  title: (j.address || `${j.code} ${j.client_name ?? ''}`).trim().slice(0, 24),
+  description:
+    [j.code, j.client_name, j.address && j.address.length > 24 ? j.address : null].filter(Boolean).join(' · ').slice(0, 72) || undefined,
 })
+const siteName = (j: { code: string; address: string | null }) => (j.address ? `${j.address} (${j.code})` : j.code)
 
 async function sendJobList(supabase: Supabase, from: string, worker: Worker) {
   const jobs = await activeJobs(supabase)
@@ -227,7 +225,7 @@ async function sendJobList(supabase: Supabase, from: string, worker: Worker) {
 }
 
 async function signIn(supabase: Supabase, from: string, worker: Worker, which: { id: string } | { code: string }) {
-  const { data: jobRows } = await supabase.from('jobs').select('id, code, client_name, status')
+  const { data: jobRows } = await supabase.from('jobs').select('id, code, client_name, address, status')
   const job = 'id' in which
     ? jobRows?.find((j) => j.id === which.id)
     : jobRows?.find((j) => compactCode(j.code) === compactCode(which.code))
@@ -253,7 +251,7 @@ async function signIn(supabase: Supabase, from: string, worker: Worker, which: {
     if (closed.flagged) await askForFinishTime(supabase, worker.id, open.id)
     switched = closed.flagged
       ? `You didn't sign out of ${open.jobs?.code ?? 'your last job'}, so I put ${fmtClock(closed.end)} as the finish. Reply with the real finish time (e.g. 4:30pm) to fix it.\n\n`
-      : `Switched from ${open.jobs?.code ?? 'your last job'}. `
+      : `Switched from ${open.jobs?.address ?? open.jobs?.code ?? 'your last job'}. `
   }
 
   const { error } = await supabase
@@ -265,8 +263,7 @@ async function signIn(supabase: Supabase, from: string, worker: Worker, which: {
     return
   }
 
-  const where = job.client_name ? ` (${job.client_name})` : ''
-  await sendButtons(from, `${switched}Signed in to ${job.code}${where} ✓`, [{ id: 'signout', title: 'Sign out' }])
+  await sendButtons(from, `${switched}Signed in at ${siteName(job)} ✓`, [{ id: 'signout', title: 'Sign out' }])
 }
 
 async function signOut(supabase: Supabase, from: string, worker: Worker) {
@@ -315,64 +312,61 @@ async function handleReceipt(supabase: Supabase, from: string, worker: Worker, m
   }
   const label = `${saved.supplier ?? 'Receipt'} ${money(saved.total)}`
   if (saved.duplicate) {
-    await sendText(from, `${label} was already added before, so I haven't counted it twice. 👍`)
+    await sendText(from, `Receipt saved ✓ (${label} was already in the system, so it isn't counted twice.)`)
     return
   }
   if (saved.job_id) {
-    const { data: job } = await supabase.from('jobs').select('code').eq('id', saved.job_id).maybeSingle()
-    await sendText(from, `Got it ✓ ${label} added to ${job?.code ?? 'the job'}.`)
+    const { data: coded } = await supabase.from('jobs').select('code, address').eq('id', saved.job_id).maybeSingle()
+    await sendText(from, `Receipt saved ✓ ${label} → ${coded ? siteName(coded) : 'the job'}.`)
     return
   }
 
-  // No job code on it: ask which job, with the job they're signed in to first
-  const open = await getOpenEntry(supabase, worker.id)
-  const jobs = await activeJobs(supabase)
-  const ordered = [...jobs].sort((a, b) => (a.id === open?.job_id ? -1 : b.id === open?.job_id ? 1 : 0)).slice(0, 10)
-  if (!ordered.length) {
-    await sendText(from, `Got it: ${label}. There are no active jobs, so your boss will sort out which job it belongs to.`)
+  // No job code on it: put it on the job they're signed in to (or worked on today); otherwise the boss sorts it
+  const job = await currentOrTodaysJob(supabase, worker.id)
+  if (job) {
+    await supabase
+      .from('expenses')
+      .update({ job_id: job.id, ...(saved.needsCheck ? {} : { status: 'approved' }) })
+      .eq('id', saved.id)
+      .is('job_id', null)
+    await sendText(from, `Receipt saved ✓ ${label} → ${siteName(job)}.`)
     return
   }
-  await sendList(
-    from,
-    `Got it: ${label}. Which job is it for?`,
-    'Choose job',
-    ordered.map((j) => ({ id: `rcpt:${saved.id}:${j.id}`, ...jobRow(j) })),
-  )
+  await sendText(from, `Receipt saved ✓ ${label}. Your boss will put it on the right job.`)
 }
 
-async function assignReceipt(supabase: Supabase, from: string, worker: Worker, expenseId: string, jobId: string) {
-  const { data: job } = await supabase.from('jobs').select('id, code, status').eq('id', jobId).maybeSingle()
-  if (!job || job.status !== 'active') {
-    await sendText(from, `That job isn't active any more. Your boss will sort out this receipt.`)
-    return
-  }
-  // Only the worker who sent the receipt can choose its job, and only while it's still waiting
-  const { data, error } = await supabase
-    .from('expenses')
-    .update({ job_id: job.id, status: 'approved' })
-    .eq('id', expenseId)
-    .eq('submitted_by', worker.id)
-    .is('job_id', null)
-    .is('note', null)
-    .select('supplier, total')
-    .maybeSingle()
-  if (error || !data) {
-    // Possible duplicates stay for the boss to check
-    await supabase.from('expenses').update({ job_id: job.id }).eq('id', expenseId).eq('submitted_by', worker.id).is('job_id', null)
-    await sendText(from, `Thanks — noted for ${job.code}. Your boss will double-check this one.`)
-    return
-  }
-  await sendText(from, `Added ✓ ${data.supplier ?? 'Receipt'} ${money(Number(data.total))} to ${job.code}.`)
+async function currentOrTodaysJob(supabase: Supabase, workerId: string) {
+  const { data } = await supabase
+    .from('time_entries')
+    .select('start_time, end_time, jobs(id, code, address, status)')
+    .eq('worker_id', workerId)
+    .gte('start_time', sydneyTimeOn(todaySydney(), 0) ?? new Date().toISOString())
+    .order('start_time', { ascending: false })
+  const rows = (data ?? []) as unknown as { end_time: string | null; jobs: { id: string; code: string; address: string | null; status: string } | null }[]
+  const pick = rows.find((r) => !r.end_time) ?? rows[0]
+  return pick?.jobs && pick.jobs.status === 'active' ? pick.jobs : null
 }
 
 async function askFinishedEarlier(supabase: Supabase, from: string, worker: Worker) {
   const open = await getOpenEntry(supabase, worker.id)
-  if (!open) {
-    await sendButtons(from, `You're not signed in right now.`, [{ id: 'missed', title: 'Add missed hours' }])
+  let entry: { id: string; code: string } | null = open ? { id: open.id, code: open.jobs?.code ?? 'the job' } : null
+  if (!entry) {
+    const { data } = await supabase
+      .from('time_entries')
+      .select('id, jobs(code)')
+      .eq('worker_id', worker.id)
+      .gte('start_time', sydneyTimeOn(todaySydney(), 0) ?? new Date().toISOString())
+      .order('start_time', { ascending: false })
+      .limit(1)
+      .maybeSingle()
+    if (data) entry = { id: data.id, code: (data.jobs as unknown as { code: string } | null)?.code ?? 'the job' }
+  }
+  if (!entry) {
+    await sendButtons(from, `You have no hours today to change.`, [{ id: 'missed', title: 'Add missed hours' }])
     return
   }
-  await askForFinishTime(supabase, worker.id, open.id)
-  await sendText(from, `What time did you finish at ${open.jobs?.code ?? 'the job'}? Reply like 3:30pm.`)
+  await askForFinishTime(supabase, worker.id, entry.id)
+  await sendText(from, `What time did you finish at ${entry.code}? Reply like 3:30pm.`)
 }
 
 async function sendMissedJobList(supabase: Supabase, from: string, worker: Worker) {

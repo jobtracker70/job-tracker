@@ -38,14 +38,15 @@ export async function askForFinishTime(supabase: Supabase, workerId: string, ent
     .upsert({ worker_id: workerId, kind: 'finish_time', entry_id: entryId, job_id: null, created_at: new Date().toISOString() })
 }
 
-type OpenRow = { id: string; start_time: string; worker_id: string; workers: { phone: string; active: boolean } | null; jobs: { code: string } | null }
+type OpenRow = { id: string; start_time: string; worker_id: string; workers: { phone: string; active: boolean } | null; jobs: { code: string; address: string | null } | null }
+const site = (e: OpenRow) => e.jobs?.address ?? e.jobs?.code ?? 'the job'
 
 // 8 hours after sign-in: "Finished for the day?"
 export async function sendDueReminders(supabase: Supabase) {
   const cutoff = new Date(Date.now() - REMIND_AFTER_HOURS * 3600000).toISOString()
   const { data } = await supabase
     .from('time_entries')
-    .select('id, start_time, worker_id, workers(phone, active), jobs(code)')
+    .select('id, start_time, worker_id, workers(phone, active), jobs(code, address)')
     .is('end_time', null)
     .is('reminded_at', null)
     .lte('start_time', cutoff)
@@ -55,10 +56,9 @@ export async function sendDueReminders(supabase: Supabase) {
     if (!e.workers?.active) continue
     const ok = await sendButtons(
       waNumber(e.workers.phone),
-      `You've been signed in at ${e.jobs?.code ?? 'the job'} since ${fmtClock(e.start_time)} (${REMIND_AFTER_HOURS} hours). Finished for the day?`,
+      `You've been signed in at ${site(e)} since ${fmtClock(e.start_time)} (${REMIND_AFTER_HOURS} hours). Finished for the day?\n\n(Finished earlier? Type "change hours".)`,
       [
         { id: 'signout', title: 'Sign out now' },
-        { id: 'finished_earlier', title: 'Finished earlier' },
         { id: 'still_working', title: 'Still working' },
       ],
     )
@@ -72,7 +72,7 @@ export async function autoCloseStale(supabase: Supabase) {
   const cutoff = new Date(Date.now() - MAX_SHIFT_HOURS * 3600000).toISOString()
   const { data } = await supabase
     .from('time_entries')
-    .select('id, start_time, worker_id, workers(phone, active), jobs(code)')
+    .select('id, start_time, worker_id, workers(phone, active), jobs(code, address)')
     .is('end_time', null)
     .lt('start_time', cutoff)
   for (const e of (data ?? []) as unknown as OpenRow[]) {
@@ -81,7 +81,7 @@ export async function autoCloseStale(supabase: Supabase) {
     await askForFinishTime(supabase, e.worker_id, e.id)
     await sendText(
       waNumber(e.workers.phone),
-      `You didn't sign out of ${e.jobs?.code ?? 'the job'}, so I've put your finish time as ${fmtClock(closed.end)} ` +
+      `You didn't sign out at ${site(e)}, so I've put your finish time as ${fmtClock(closed.end)} ` +
         `(${AUTO_CLOSE_HOURS} hours after you signed in). If you finished at a different time, reply with the time, e.g. 4:30pm.`,
     )
   }

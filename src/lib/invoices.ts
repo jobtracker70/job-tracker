@@ -108,6 +108,7 @@ export type SavedInvoice = {
   supplier: string | null
   total: number
   duplicate: boolean
+  needsCheck: boolean
 }
 
 // Reads one file and saves it as an expense. Returns null if it isn't an invoice.
@@ -143,7 +144,7 @@ export async function processInvoiceFile(
     (e) => x.invoice_number && e.invoice_number && compactCode(e.invoice_number) === compactCode(x.invoice_number),
   )
   if (exact) {
-    return { id: exact.id, status: exact.status, job_id: exact.job_id, supplier: exact.supplier, total, duplicate: true }
+    return { id: exact.id, status: exact.status, job_id: exact.job_id, supplier: exact.supplier, total, duplicate: true, needsCheck: false }
   }
   const possibleDuplicate = sameSupplier.some(
     (e) => (!x.invoice_number || !e.invoice_number) && x.invoice_date && e.expense_date === x.invoice_date,
@@ -203,5 +204,5 @@ export async function processInvoiceFile(
     .select('id, status, job_id, supplier, total')
     .single()
   if (error) throw new Error(error.message)
-  return { ...data, total: Number(data.total), duplicate: false }
+  return { ...data, total: Number(data.total), duplicate: false, needsCheck: !confident || !subbieOk || possibleDuplicate }
 }
