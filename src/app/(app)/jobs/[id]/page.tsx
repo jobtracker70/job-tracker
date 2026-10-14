@@ -1,8 +1,8 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
-import { isSubbieType, loadJob } from '@/lib/job-data'
+import { isSubbieType, loadJob, peopleOnJob } from '@/lib/job-data'
 import { FINISHED, jobPill, jobSentence, jobSubtitle, jobTitle } from '@/lib/status'
-import { fmtClock, fmtDate, hrs, money, moneyCents, todaySydney } from '@/lib/format'
+import { fmtDate, fmtTimeOfDay, hrs, money, moneyCents, timeToMinutes, todaySydney } from '@/lib/format'
 import {
   AlertBar, Collapsible, Pill, ProgressBar, SmallTag,
   buttonClass, cardClass, dangerButtonClass, inputClass, secondaryButtonClass,
@@ -24,7 +24,9 @@ export default async function JobPage({ params, searchParams }: { params: Promis
     : null
   const finished = FINISHED.includes(j.status)
 
-  const people = new Set(entries.map((e) => e.worker_id)).size
+  const peopleRows = peopleOnJob(entries)
+  const people = peopleRows.length
+  const checkCount = entries.filter((e) => e.needs_review).length
   const counted = expenses.filter((x) => x.status !== 'rejected')
   const invoicesTotal = counted.reduce((s, x) => s + Number(x.amount_ex_gst), 0)
   const subbieMismatch = subbieRows.some((r) => !r.fixed && r.invoiced > 0 && Math.abs(r.invoiced - r.logged) >= 0.5)
@@ -40,6 +42,11 @@ export default async function JobPage({ params, searchParams }: { params: Promis
       <div />
       <Field label="Start date" name="start_date" type="date" defaultValue={j.start_date} />
       <Field label="Finish date" name="planned_finish" type="date" defaultValue={j.planned_finish} />
+      <TimeField label="Usual start time" name="day_start" value={job.day_start} />
+      <TimeField label="Usual finish time" name="day_end" value={job.day_end} />
+      <p className="sm:col-span-2 text-xs text-faint -mt-1">
+        Signing in up to 30 minutes before the start counts from the start. Signing out up to 20 minutes after the finish counts as the finish; later than that, the worker is asked to confirm.
+      </p>
       <div className="sm:col-span-2 flex flex-wrap items-center gap-3">
         <button className={buttonClass}>Save changes</button>
         {pdfUrl && <a href={pdfUrl} target="_blank" className="text-brand text-sm font-medium hover:underline">Open quote PDF</a>}
@@ -139,60 +146,69 @@ export default async function JobPage({ params, searchParams }: { params: Promis
           <div className={cardClass}>
             <Collapsible title="Hours worked" summary={entries.length ? `${people} ${people === 1 ? 'person' : 'people'}, ${hrs(nums.hoursUsed)}` : 'No sign-ins yet'}>
               {!entries.length ? (
-                <p className="text-sm text-muted">Workers sign in on WhatsApp and pick this job.</p>
+                <p className="text-sm text-muted py-1">Workers sign in on WhatsApp and pick this job.</p>
               ) : (
                 <ul className="divide-y divide-line">
-                  {entries.slice(0, 40).map((e) => (
-                    <li key={e.id} className="py-2.5 flex items-center justify-between gap-3 text-sm">
-                      <span className="min-w-0">
-                        <span className="font-semibold">{e.worker_name}</span>
-                        <span className="block text-muted">
-                          {fmtDate(e.work_day)}, {fmtClock(e.start_time)}–{e.end_time ? fmtClock(e.end_time) : 'now'}
+                  {peopleRows.map((p) => (
+                    <li key={p.workerId}>
+                      <Link href={`/jobs/${id}/people/${p.workerId}`} className="py-2.5 flex items-center justify-between gap-3 text-sm hover:text-brand">
+                        <span className="min-w-0">
+                          <span className="font-semibold">{p.name}</span>
+                          {isSubbieType(p.type) && <span className="ml-1.5"><SmallTag>subbie</SmallTag></span>}
+                          <span className="block text-muted">{p.days} day{p.days === 1 ? '' : 's'} · {p.weeks.length} week{p.weeks.length === 1 ? '' : 's'}</span>
                         </span>
-                        <span className="flex flex-wrap gap-1 mt-1">
-                          {e.needs_review && <SmallTag tone="bad">check</SmallTag>}
-                          {e.is_weekend && <SmallTag tone="brand">weekend</SmallTag>}
-                          {Number(e.overtime_hours) > 0.01 && <SmallTag tone="brand">{hrs(Number(e.overtime_hours))} overtime</SmallTag>}
-                          {isSubbieType(e.worker_type) && <SmallTag>subbie</SmallTag>}
+                        <span className="flex items-center gap-2 shrink-0">
+                          <span className="text-right">
+                            <span className="font-semibold block">{hrs(p.hours)}</span>
+                            <span className="text-faint">{isSubbieType(p.type) ? 'invoice' : money(p.cost)}</span>
+                          </span>
+                          <span className="text-faint">›</span>
                         </span>
-                      </span>
-                      <span className="text-right shrink-0">
-                        <span className="font-semibold block">{hrs(Number(e.paid_hours))}</span>
-                        <span className="text-faint">{isSubbieType(e.worker_type) ? 'invoice' : money(Number(e.cost))}</span>
-                      </span>
+                      </Link>
                     </li>
                   ))}
                 </ul>
               )}
-              <Link href={`/hours?job=${id}`} className="inline-block mt-3 text-brand text-sm font-semibold">Add or fix hours →</Link>
+              <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2 mb-1 text-sm font-semibold">
+                <Link href={`/hours?job=${id}`} className="text-brand">See every shift{checkCount ? ` (${checkCount} to check)` : ''} →</Link>
+              </div>
             </Collapsible>
 
             <Collapsible title="Invoices" summary={counted.length ? `${counted.length} invoice${counted.length > 1 ? 's' : ''}, ${money(invoicesTotal)}` : 'No invoices yet'}>
               {!expenses.length ? (
-                <p className="text-sm text-muted">They arrive from the receipts email, from workers&apos; WhatsApp photos, or you can upload one.</p>
+                <p className="text-sm text-muted py-1">They arrive from the receipts email, from workers&apos; WhatsApp photos, or you can upload one.</p>
               ) : (
                 <ul className="divide-y divide-line">
-                  {expenses.map((x) => (
-                    <li key={x.id} className={`py-2.5 flex items-center justify-between gap-3 text-sm ${x.status === 'rejected' ? 'opacity-40 line-through' : ''}`}>
-                      <span className="min-w-0">
-                        <span className="font-semibold">{x.supplier ?? 'Unknown'}</span>
-                        <span className="block text-muted">{fmtDate(x.expense_date)}{x.hours ? ` · ${hrs(Number(x.hours))}` : ''}</span>
-                        <span className="flex flex-wrap gap-1 mt-1">
-                          {x.status === 'pending' && <SmallTag tone="warn">needs checking</SmallTag>}
-                          {x.source === 'whatsapp' && <SmallTag>photo</SmallTag>}
-                          {x.category === 'subbie' && <SmallTag>subbie</SmallTag>}
-                          {x.is_credit && <SmallTag tone="good">credit</SmallTag>}
+                  {expenses.slice(0, 8).map((x) => (
+                    <li key={x.id} className={x.status === 'rejected' ? 'opacity-40 line-through' : ''}>
+                      <Link href={`/inbox/${x.id}`} className="py-2.5 flex items-center justify-between gap-3 text-sm hover:text-brand">
+                        <span className="min-w-0">
+                          <span className="font-semibold">{x.supplier ?? 'Unknown'}</span>
+                          <span className="block text-muted">{fmtDate(x.expense_date)}{x.hours ? ` · ${hrs(Number(x.hours))}` : ''}</span>
+                          <span className="flex flex-wrap gap-1 mt-1">
+                            {x.status === 'pending' && <SmallTag tone="warn">needs checking</SmallTag>}
+                            {x.source === 'whatsapp' && <SmallTag>photo</SmallTag>}
+                            {x.category === 'subbie' && <SmallTag>subbie</SmallTag>}
+                            {x.is_credit && <SmallTag tone="good">credit</SmallTag>}
+                          </span>
                         </span>
-                      </span>
-                      <span className={`text-right shrink-0 font-semibold ${x.is_credit ? 'text-good' : ''}`}>
-                        {moneyCents(Number(x.amount_ex_gst))}
-                        <span className="block text-faint text-xs font-normal">ex GST</span>
-                      </span>
+                        <span className="flex items-center gap-2 shrink-0">
+                          <span className={`text-right font-semibold ${x.is_credit ? 'text-good' : ''}`}>
+                            {moneyCents(Number(x.amount_ex_gst))}
+                            <span className="block text-faint text-xs font-normal">ex GST</span>
+                          </span>
+                          <span className="text-faint">›</span>
+                        </span>
+                      </Link>
                     </li>
                   ))}
                 </ul>
               )}
-              <Link href="/inbox" className="inline-block mt-3 text-brand text-sm font-semibold">Upload or check invoices →</Link>
+              {expenses.length > 8 && <p className="text-xs text-faint mt-1">Showing the newest 8 of {expenses.length}.</p>}
+              <div className="grid grid-cols-2 gap-2 mt-2 mb-1">
+                <Link href={`/jobs/${id}/invoices`} className={secondaryButtonClass}>Everything bought</Link>
+                <Link href={`/jobs/${id}/invoices#upload`} className={secondaryButtonClass}>Upload invoice</Link>
+              </div>
             </Collapsible>
 
             <Collapsible
@@ -299,6 +315,22 @@ function Field({ label, name, defaultValue, type = 'text', required }: {
     <label className="block">
       <span className="text-sm font-medium">{label}</span>
       <input type={type} name={name} required={required} defaultValue={defaultValue ?? ''} className={`${inputClass} mt-1.5`} />
+    </label>
+  )
+}
+
+const TIMES = Array.from({ length: (21 - 5) * 4 }, (_, i) => 5 * 60 + i * 15)
+
+function TimeField({ label, name, value }: { label: string; name: string; value: string | null }) {
+  const current = timeToMinutes(value, name === 'day_start' ? 7 * 60 : 15 * 60 + 30)
+  const opts = TIMES.includes(current) ? TIMES : [...TIMES, current].sort((a, b) => a - b)
+  const hhmm = (m: number) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`
+  return (
+    <label className="block">
+      <span className="text-sm font-medium">{label}</span>
+      <select name={name} defaultValue={hhmm(current)} className={`${inputClass} mt-1.5`}>
+        {opts.map((m) => <option key={m} value={hhmm(m)}>{fmtTimeOfDay(hhmm(m))}</option>)}
+      </select>
     </label>
   )
 }

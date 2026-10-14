@@ -176,6 +176,29 @@ export function parseTimeRange(input: string): { start: number; end: number } | 
   return { start, end }
 }
 
+// "07:00:00" (a database time) -> minutes after midnight
+export function timeToMinutes(t: string | null | undefined, fallback: number) {
+  const m = (t ?? '').match(/^(\d{1,2}):(\d{2})/)
+  return m ? Number(m[1]) * 60 + Number(m[2]) : fallback
+}
+
+// "07:00:00" -> "7:00am"
+export function fmtTimeOfDay(t: string | null | undefined) {
+  const mins = timeToMinutes(t, -1)
+  if (mins < 0) return '—'
+  const h = Math.floor(mins / 60)
+  const m = mins % 60
+  return `${h % 12 || 12}:${String(m).padStart(2, '0')}${h < 12 ? 'am' : 'pm'}`
+}
+
+// 9.75 -> "9h 45m"
+export function fmtDuration(hours: number) {
+  const total = Math.round(hours * 60)
+  const h = Math.floor(total / 60)
+  const m = total % 60
+  return m ? `${h}h ${m}m` : `${h}h`
+}
+
 // Minutes after midnight on a Sydney date -> ISO timestamp
 export function sydneyTimeOn(date: string, minutes: number) {
   const hh = String(Math.floor(minutes / 60)).padStart(2, '0')

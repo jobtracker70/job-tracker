@@ -1,7 +1,8 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
-import { fmtDate, hrs, money, sydneyDateOf, workingDaysBetween } from '@/lib/format'
-import { isSubbieType, loadJob } from '@/lib/job-data'
+import { fmtDate, hrs, money, moneyCents, sydneyDateOf, workingDaysBetween } from '@/lib/format'
+import { isSubbieType, loadJob, peopleOnJob, weekLabel } from '@/lib/job-data'
+import { fmtQty, itemsOf, totalItems } from '@/lib/items'
 import { cardClass } from '@/components/ui'
 import { jobSubtitle, jobTitle } from '@/lib/status'
 import { PrintButton } from './print-button'
@@ -77,6 +78,9 @@ export default async function JobReportPage({ params }: { params: Promise<{ id: 
   const materialsDiff = materialsBudget == null ? null : nums.materialsCost - materialsBudget
   const materialsDiffPct = materialsBudget ? nums.materialsCost / materialsBudget - 1 : null
   const photoReceipts = counted.filter((x) => x.source === 'whatsapp').length
+  const bought = totalItems(materials)
+  const weekly = peopleOnJob(entries)
+  const allWeeks = [...new Set(weekly.flatMap((p) => p.weeks.map((w) => w.week)))].sort()
 
   // ---------- Subbies ----------
   const subbieCost = Number(j.subbie_cost)
@@ -225,6 +229,82 @@ export default async function JobReportPage({ params }: { params: Promise<{ id: 
           ]}
           note="Quoted hours and materials include variations. 'Quoted' profit uses the actual cost per hour, to show what the job would have made if it ran exactly to the quote."
         />
+      </Section>
+
+      {/* Hours per person per week */}
+      <Section title="Hours by person, week by week">
+        {!weekly.length ? (
+          <p className="text-faint text-sm">No hours recorded.</p>
+        ) : (
+          <>
+            <Table
+              head={['Person', ...allWeeks.map((w) => weekLabel(w)), 'Total']}
+              rows={weekly.map((p) => [
+                `${p.name}${isSubbieType(p.type) ? ' (subbie)' : ''}`,
+                ...allWeeks.map((wk) => {
+                  const w = p.weeks.find((x) => x.week === wk)
+                  return w ? `${hrs(w.hours)} · ${w.days}d` : '—'
+                }),
+                hrs(p.hours),
+              ])}
+              foot={[
+                'Crew total',
+                ...allWeeks.map((wk) => hrs(weekly.reduce((s, p) => s + (p.weeks.find((x) => x.week === wk)?.hours ?? 0), 0))),
+                hrs(weekly.reduce((s, p) => s + p.hours, 0)),
+              ]}
+              note="Paid hours (unpaid breaks taken off) and days on site. Weeks run Monday to Sunday."
+            />
+            <p className="text-sm mt-3 print:hidden">
+              {weekly.map((p, i) => (
+                <span key={p.workerId}>
+                  {i > 0 && ' · '}
+                  <Link href={`/jobs/${id}/people/${p.workerId}`} className="text-brand font-medium">{p.name}&apos;s shifts</Link>
+                </span>
+              ))}
+            </p>
+          </>
+        )}
+      </Section>
+
+      {/* What was bought */}
+      <Section title="What was bought">
+        {!bought.length ? (
+          <p className="text-faint text-sm">No item lists on this job&apos;s invoices yet.</p>
+        ) : (
+          <Table
+            head={['Item', 'Total qty', 'Spent']}
+            rows={bought.map((b) => [`${b.description}${b.times > 1 ? ` (${b.times} invoices)` : ''}`, fmtQty(b.qty), moneyCents(b.amount)])}
+            note="Added up across every materials invoice on this job, with returns taken off. Prices as printed on the invoices."
+          />
+        )}
+        <Link href={`/jobs/${id}/invoices`} className="inline-block mt-3 text-brand text-sm font-semibold print:hidden">See each invoice →</Link>
+      </Section>
+
+      {/* Each invoice */}
+      <Section title="Each invoice" collapsed>
+        {!counted.length ? (
+          <p className="text-faint text-sm">No invoices.</p>
+        ) : (
+          <div className="space-y-4">
+            {counted.map((x) => (
+              <div key={x.id} className="border-b border-line last:border-0 pb-4 last:pb-0">
+                <div className="flex justify-between gap-3">
+                  <Link href={`/inbox/${x.id}`} className="font-semibold hover:text-brand">
+                    {x.supplier ?? 'Unknown'} <span className="text-muted font-normal">· {fmtDate(x.expense_date)}{x.invoice_number ? ` · #${x.invoice_number}` : ''}</span>
+                  </Link>
+                  <span className={`font-semibold ${x.is_credit ? 'text-good' : ''}`}>{moneyCents(Number(x.amount_ex_gst))}</span>
+                </div>
+                {itemsOf(x.line_items).length > 0 && (
+                  <ul className="text-sm text-muted mt-1 space-y-0.5">
+                    {itemsOf(x.line_items).map((i, k) => (
+                      <li key={k}>{fmtQty(i.qty ?? 1)} × {i.description}{i.amount != null ? ` — ${moneyCents(i.amount)}` : ''}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </Section>
 
       {/* Dates */}

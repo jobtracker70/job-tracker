@@ -9,6 +9,7 @@ import { num, text } from '@/lib/format'
 
 function refresh() {
   revalidatePath('/inbox')
+  revalidatePath('/jobs/[id]', 'layout')
   revalidatePath('/')
 }
 

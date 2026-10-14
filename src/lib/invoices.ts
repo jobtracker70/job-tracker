@@ -19,8 +19,11 @@ type Extracted = {
   job_code: string | null
   category: 'materials' | 'subbie' | 'other'
   hours: number | null
+  items: LineItem[] | null
   confidence: 'high' | 'medium' | 'low'
 }
+
+export type LineItem = { description: string; qty: number | null; unit_price: number | null; amount: number | null }
 
 const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'] as const
 
@@ -45,6 +48,7 @@ Return ONLY valid JSON, no markdown:
   "job_code": "one of the listed job codes, or null",
   "category": "materials" (paint, supplies, equipment hire) | "subbie" (labour charged by a subcontractor) | "other",
   "hours": total labour hours billed if this is a subbie invoice, else null,
+  "items": every line on the invoice, in order: [{"description": "product or service exactly as written, including brand, colour and size e.g. Dulux Wash&Wear Low Sheen Vivid White 10L", "qty": number or null, "unit_price": price per unit as shown or null, "amount": line total as shown or null}],
   "confidence": "high" | "medium" | "low"
 }
 Statements, quotes, marketing and remittance advice are NOT invoices. Credit notes, refund receipts and return receipts DO count (set is_credit true).`
@@ -67,7 +71,7 @@ function contentFor(file: InvoiceFile, codes: string[], hint?: string): Anthropi
 export async function extractInvoice(file: InvoiceFile, codes: string[], hint?: string): Promise<Extracted | null> {
   const msg = await anthropic.messages.create({
     model: MODEL,
-    max_tokens: 1024,
+    max_tokens: 4096,
     messages: [{ role: 'user', content: contentFor(file, codes, hint) }],
   })
   const t = msg.content.find((c) => c.type === 'text')
@@ -95,6 +99,17 @@ function findJobInText(jobs: JobRef[], text: string | null | undefined) {
     if (new RegExp(`(?<![A-Z0-9])${esc}(?![A-Z0-9])`).test(up)) return j
   }
   return null
+}
+
+const toNum = (v: unknown) => (v == null || v === '' || !Number.isFinite(Number(v)) ? null : Number(v))
+
+function cleanItems(items: unknown): LineItem[] | null {
+  if (!Array.isArray(items)) return null
+  const out = items
+    .filter((i) => i && typeof i.description === 'string' && i.description.trim())
+    .slice(0, 200)
+    .map((i) => ({ description: String(i.description).trim(), qty: toNum(i.qty), unit_price: toNum(i.unit_price), amount: toNum(i.amount) }))
+  return out.length ? out : null
 }
 
 const digits = (s: string | null | undefined) => (s ?? '').replace(/\D/g, '')
@@ -199,6 +214,7 @@ export async function processInvoiceFile(
       note: possibleDuplicate ? 'Possible duplicate: same supplier, amount and date as an invoice already added.' : null,
       file_name: file.name,
       image_path: uploadError ? null : path,
+      line_items: cleanItems(x.items),
       extraction_json: x,
     })
     .select('id, status, job_id, supplier, total')

@@ -68,6 +68,8 @@ export async function updateJob(jobId: string, formData: FormData) {
       quoted_materials: num(formData.get('quoted_materials')),
       start_date: text(formData.get('start_date')),
       planned_finish: text(formData.get('planned_finish')),
+      ...(text(formData.get('day_start')) ? { day_start: text(formData.get('day_start')) } : {}),
+      ...(text(formData.get('day_end')) ? { day_end: text(formData.get('day_end')) } : {}),
     })
     .eq('id', jobId)
   if (error) redirect(`/jobs/${jobId}?codeError=${error.code === '23505' ? 'used' : 'invalid'}`)

@@ -1,8 +1,11 @@
 import Link from 'next/link'
 import { createServiceClient } from '@/lib/supabase'
 import { shiftsToCheck } from '@/lib/checks'
-import { fmtClock, fmtDate, hrs, money, sydneyMidnightISO, toSydneyLocalInput, todaySydney } from '@/lib/format'
+import { fmtClock, fmtDate, fmtDuration, hrs, money, sydneyMidnightISO, timeToMinutes, toSydneyLocalInput, todaySydney } from '@/lib/format'
+import { DEFAULT_END, DEFAULT_START } from '@/lib/hours'
+import { waNumber } from '@/lib/whatsapp'
 import { AlertBar, SmallTag, buttonClass, cardClass, dangerButtonClass, inputClass, secondaryButtonClass } from '@/components/ui'
+import { ShiftTimes } from '@/components/shift-times'
 import { addEntry, deleteEntry, markReviewed, updateEntry } from './actions'
 
 export const dynamic = 'force-dynamic'
@@ -12,12 +15,15 @@ type Entry = {
   start_time: string; end_time: string | null; needs_review: boolean; review_reason: string | null
   work_day: string; is_weekend: boolean; raw_hours: number; paid_hours: number; overtime_hours: number; cost: number; has_rate: boolean
 }
-type Job = { id: string; code: string; client_name: string | null; address: string | null; status: string }
+type Job = { id: string; code: string; client_name: string | null; address: string | null; status: string; day_start: string | null; day_end: string | null }
+type OnSite = { id: string; start_time: string; workers: { name: string } | null; jobs: { code: string; address: string | null } | null }
+
+const usual = (j: Job | undefined) => ({ usualStart: timeToMinutes(j?.day_start, DEFAULT_START), usualEnd: timeToMinutes(j?.day_end, DEFAULT_END) })
 
 const jobName = (j: Job | undefined) => j?.address ?? j?.code ?? 'a job'
 
-export default async function HoursPage({ searchParams }: { searchParams: Promise<{ job?: string; error?: string }> }) {
-  const { job: jobFilter, error } = await searchParams
+export default async function HoursPage({ searchParams }: { searchParams: Promise<{ job?: string; error?: string; add?: string }> }) {
+  const { job: jobFilter, error, add } = await searchParams
   const supabase = createServiceClient()
   const today = todaySydney()
   const twoWeeksAgo = new Date(`${today}T00:00:00Z`)
@@ -26,24 +32,27 @@ export default async function HoursPage({ searchParams }: { searchParams: Promis
   let recentQuery = supabase.from('time_entry_costs').select('*').order('start_time', { ascending: false }).limit(300)
   recentQuery = jobFilter ? recentQuery.eq('job_id', jobFilter) : recentQuery.gte('start_time', sydneyMidnightISO(twoWeeksAgo.toISOString().slice(0, 10)))
 
-  const [{ data: recentData }, toCheck, { data: todayData }, { data: workers }, { data: jobsData }] = await Promise.all([
+  const [{ data: recentData }, toCheck, { data: todayData }, { data: openData }, { data: workers }, { data: jobsData }] = await Promise.all([
     recentQuery,
     shiftsToCheck(supabase),
-    supabase.from('time_entries').select('worker_id, end_time').gte('start_time', sydneyMidnightISO(today)),
-    supabase.from('workers').select('id, name, type').eq('active', true).order('name'),
-    supabase.from('jobs').select('id, code, client_name, address, status').in('status', ['active', 'complete', 'invoiced', 'paid']).order('created_at', { ascending: false }),
+    supabase.from('time_entries').select('worker_id').gte('start_time', sydneyMidnightISO(today)),
+    supabase.from('time_entries').select('id, start_time, workers(name), jobs(code, address)').is('end_time', null).order('start_time'),
+    supabase.from('workers').select('id, name, type, phone').eq('active', true).order('name'),
+    supabase.from('jobs').select('id, code, client_name, address, status, day_start, day_end').in('status', ['active', 'complete', 'invoiced', 'paid']).order('created_at', { ascending: false }),
   ])
   const recent = (recentData ?? []) as Entry[]
   const jobs = (jobsData ?? []) as Job[]
   const jobById = new Map(jobs.map((j) => [j.id, j]))
   const checks = jobFilter ? toCheck.filter((c) => c.jobId === jobFilter) : toCheck
 
-  const onSite = (todayData ?? []).filter((e) => !e.end_time).length
+  const onSite = (openData ?? []) as unknown as OnSite[]
   const signedIn = new Set((todayData ?? []).map((e) => e.worker_id))
   const weekday = ![0, 6].includes(new Date(`${today}T00:00:00Z`).getUTCDay())
   const notSignedIn = weekday ? (workers ?? []).filter((w) => w.type !== 'subbie_fixed' && !signedIn.has(w.id)) : []
   const back = jobFilter ? `/hours?job=${jobFilter}` : '/hours'
   const filtered = jobFilter ? jobById.get(jobFilter) : undefined
+  const activeJobs = jobs.filter((j) => j.status === 'active')
+  const nowMs = new Date().getTime()
 
   // Group recent shifts by day
   const days = new Map<string, Entry[]>()
@@ -60,18 +69,13 @@ export default async function HoursPage({ searchParams }: { searchParams: Promis
             </p>
           )}
         </div>
-        <details className="group relative">
+        <details id="add" className="group relative" open={!!add}>
           <summary className={`${secondaryButtonClass} cursor-pointer`}>+ Add hours</summary>
-          <form action={addEntry} className={`${cardClass} absolute right-0 z-10 mt-2 w-[min(92vw,380px)] p-4 space-y-3`}>
+          <form action={addEntry} className={`${cardClass} absolute right-0 z-10 mt-2 w-[min(92vw,400px)] p-4 space-y-3`}>
             <input type="hidden" name="back" value={back} />
-            <Select label="Worker" name="worker_id" options={(workers ?? []).map((w) => [w.id, w.name])} />
-            <Select label="Job" name="job_id" defaultValue={jobFilter} options={jobs.map((j) => [j.id, `${jobName(j)} (${j.code})`])} />
-            <div className="grid grid-cols-2 gap-2">
-              <label className="block"><span className="text-sm font-medium">Start</span>
-                <input type="datetime-local" name="start" required defaultValue={`${today}T07:00`} className={`${inputClass} mt-1.5 !px-2`} /></label>
-              <label className="block"><span className="text-sm font-medium">Finish</span>
-                <input type="datetime-local" name="end" defaultValue={`${today}T15:30`} className={`${inputClass} mt-1.5 !px-2`} /></label>
-            </div>
+            <Select label="Worker" name="worker_id" defaultValue={add} options={(workers ?? []).map((w) => [w.id, w.name])} />
+            <Select label="Job" name="job_id" defaultValue={jobFilter ?? (activeJobs.length === 1 ? activeJobs[0].id : undefined)} options={jobs.map((j) => [j.id, jobName(j)])} />
+            <ShiftTimes defaultStart="" defaultEnd="" today={today} {...usual(filtered)} />
             <button className={`${buttonClass} w-full`}>Save hours</button>
           </form>
         </details>
@@ -79,14 +83,57 @@ export default async function HoursPage({ searchParams }: { searchParams: Promis
 
       {error && <AlertBar>{error}</AlertBar>}
 
-      <div className="grid grid-cols-3 gap-3">
-        <Tile value={String(onSite)} label="On site now" />
-        <Tile
-          value={String(notSignedIn.length)}
-          extra={notSignedIn.length ? `(${notSignedIn.map((w) => w.name.split(' ')[0]).join(', ')})` : undefined}
-          label={weekday ? 'Not signed in today' : 'Weekend'}
-        />
-        <Tile value={String(checks.length)} label="To check" tone={checks.length ? 'bad' : undefined} />
+      <div className="grid md:grid-cols-2 gap-4">
+        <div className={`${cardClass} p-4`}>
+          <p className="font-bold flex items-center gap-2">
+            <span className={`w-2.5 h-2.5 rounded-full ${onSite.length ? 'bg-good' : 'bg-line'}`} />
+            On site now <span className="text-muted font-normal">({onSite.length})</span>
+          </p>
+          {!onSite.length ? (
+            <p className="text-sm text-muted mt-2">Nobody is signed in right now.</p>
+          ) : (
+            <ul className="mt-2 divide-y divide-line">
+              {onSite.map((e) => (
+                <li key={e.id} className="py-2 flex items-center justify-between gap-3 text-sm">
+                  <span className="min-w-0">
+                    <span className="font-semibold">{e.workers?.name ?? 'Someone'}</span>
+                    <span className="block text-muted truncate">{e.jobs?.address ?? e.jobs?.code ?? 'a job'}</span>
+                  </span>
+                  <span className="text-right shrink-0">
+                    <span className="block font-semibold">since {fmtClock(e.start_time)}</span>
+                    <span className="block text-faint">{fmtDuration((nowMs - new Date(e.start_time).getTime()) / 3600000)} so far</span>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+
+        <div className={`${cardClass} p-4`}>
+          <p className="font-bold">
+            {weekday ? 'Not signed in today' : 'Weekend'} {weekday && <span className="text-muted font-normal">({notSignedIn.length})</span>}
+          </p>
+          {!weekday ? (
+            <p className="text-sm text-muted mt-2">No sign-ins expected today.</p>
+          ) : !notSignedIn.length ? (
+            <p className="text-sm text-good font-medium mt-2">Everyone has signed in ✓</p>
+          ) : (
+            <>
+              <ul className="mt-2 divide-y divide-line">
+                {notSignedIn.map((w) => (
+                  <li key={w.id} className="py-2 flex items-center justify-between gap-3 text-sm">
+                    <span className="font-semibold">{w.name}</span>
+                    <span className="flex gap-2 shrink-0">
+                      <a href={`https://wa.me/${waNumber(w.phone)}`} target="_blank" className="text-brand font-semibold px-2 py-1 rounded-lg hover:bg-brand-tint">Message</a>
+                      <Link href={`/hours?add=${w.id}#add`} className="text-brand font-semibold px-2 py-1 rounded-lg hover:bg-brand-tint">Add hours</Link>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+              <p className="text-xs text-faint mt-2">Day off or forgot? Message them, or add their hours yourself.</p>
+            </>
+          )}
+        </div>
       </div>
 
       {checks.length > 0 && (
@@ -101,14 +148,11 @@ export default async function HoursPage({ searchParams }: { searchParams: Promis
                   <form action={markReviewed.bind(null, c.id, back)}><button className={buttonClass}>Looks right</button></form>
                   <span className={`${secondaryButtonClass} cursor-pointer`}>Fix time</span>
                 </summary>
-                <form action={updateEntry.bind(null, c.id)} className="grid grid-cols-2 gap-2 items-end mt-3">
+                <form action={updateEntry.bind(null, c.id)} className="mt-4 pt-4 border-t border-line space-y-3">
                   <input type="hidden" name="back" value={back} />
                   <input type="hidden" name="job_id" value={c.jobId} />
-                  <label className="block"><span className="text-sm font-medium">Start</span>
-                    <input type="datetime-local" name="start" required defaultValue={toSydneyLocalInput(c.start)} className={`${inputClass} mt-1.5 !px-2`} /></label>
-                  <label className="block"><span className="text-sm font-medium">Finish</span>
-                    <input type="datetime-local" name="end" defaultValue={toSydneyLocalInput(c.end)} className={`${inputClass} mt-1.5 !px-2`} /></label>
-                  <button className={`${buttonClass} col-span-2`}>Save time</button>
+                  <ShiftTimes defaultStart={toSydneyLocalInput(c.start)} defaultEnd={toSydneyLocalInput(c.end)} today={today} allowOpen={!c.end} {...usual(jobById.get(c.jobId))} />
+                  <button className={`${buttonClass} w-full`}>Save time</button>
                 </form>
               </details>
             </div>
@@ -126,22 +170,13 @@ export default async function HoursPage({ searchParams }: { searchParams: Promis
               <div key={day}>
                 <p className="text-sm font-semibold text-muted mb-2">{new Date(`${day}T00:00:00Z`).toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' })}</p>
                 <div className={cardClass}>
-                  {list.map((e) => <ShiftRow key={e.id} e={e} jobs={jobs} job={jobById.get(e.job_id)} back={back} />)}
+                  {list.map((e) => <ShiftRow key={e.id} e={e} jobs={jobs} job={jobById.get(e.job_id)} back={back} today={today} />)}
                 </div>
               </div>
             ))}
           </div>
         )}
       </section>
-    </div>
-  )
-}
-
-function Tile({ value, label, extra, tone }: { value: string; label: string; extra?: string; tone?: 'bad' }) {
-  return (
-    <div className={`${cardClass} p-4`}>
-      <p className={`text-2xl font-bold ${tone === 'bad' ? 'text-bad' : ''}`}>{value} {extra && <span className="text-sm font-medium text-muted">{extra}</span>}</p>
-      <p className="text-muted text-sm">{label}</p>
     </div>
   )
 }
@@ -158,7 +193,7 @@ function Select({ label, name, options, defaultValue }: { label: string; name: s
   )
 }
 
-function ShiftRow({ e, jobs, job, back }: { e: Entry; jobs: Job[]; job: Job | undefined; back: string }) {
+function ShiftRow({ e, jobs, job, back, today }: { e: Entry; jobs: Job[]; job: Job | undefined; back: string; today: string }) {
   const byWorker = e.review_reason?.toLowerCase().includes('worker')
   return (
     <details id={`shift-${e.id}`} className="group border-b border-line last:border-0">
@@ -184,17 +219,14 @@ function ShiftRow({ e, jobs, job, back }: { e: Entry; jobs: Job[]; job: Job | un
       </summary>
       <div className="px-4 pb-4 space-y-3">
         {e.review_reason && <p className="text-sm text-muted">{e.review_reason}</p>}
-        <form action={updateEntry.bind(null, e.id)} className="grid sm:grid-cols-3 gap-2 items-end">
+        <form action={updateEntry.bind(null, e.id)} className="space-y-3 max-w-md">
           <input type="hidden" name="back" value={back} />
           <label className="block"><span className="text-sm font-medium">Job</span>
             <select name="job_id" defaultValue={e.job_id} className={`${inputClass} mt-1.5`}>
               {jobs.map((j) => <option key={j.id} value={j.id}>{j.address ?? j.code}</option>)}
             </select></label>
-          <label className="block"><span className="text-sm font-medium">Start</span>
-            <input type="datetime-local" name="start" required defaultValue={toSydneyLocalInput(e.start_time)} className={`${inputClass} mt-1.5 !px-2`} /></label>
-          <label className="block"><span className="text-sm font-medium">Finish</span>
-            <input type="datetime-local" name="end" defaultValue={toSydneyLocalInput(e.end_time)} className={`${inputClass} mt-1.5 !px-2`} /></label>
-          <button className={`${buttonClass} sm:col-span-3`}>Save shift</button>
+          <ShiftTimes defaultStart={toSydneyLocalInput(e.start_time)} defaultEnd={toSydneyLocalInput(e.end_time)} today={today} allowOpen={!e.end_time} {...usual(job)} />
+          <button className={`${buttonClass} w-full`}>Save shift</button>
         </form>
         <form action={deleteEntry.bind(null, e.id, back)}><button className={dangerButtonClass}>Delete this shift</button></form>
       </div>

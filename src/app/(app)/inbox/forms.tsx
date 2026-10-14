@@ -6,7 +6,7 @@ import { buttonClass, inputClass } from '@/components/ui'
 
 type JobOption = { id: string; code: string; client_name: string | null; address: string | null }
 
-export function UploadInvoiceForm({ jobs }: { jobs: JobOption[] }) {
+export function UploadInvoiceForm({ jobs, jobId }: { jobs: JobOption[]; jobId?: string }) {
   const [message, action, pending] = useActionState(uploadInvoice, null)
   return (
     <form action={action} className="space-y-3">
@@ -17,12 +17,16 @@ export function UploadInvoiceForm({ jobs }: { jobs: JobOption[] }) {
         accept="application/pdf,text/csv,.csv,image/jpeg,image/png,image/webp"
         className="block w-full text-sm text-muted file:mr-3 file:bg-brand-tint file:text-brand file:font-semibold file:border-0 file:px-3 file:py-2 file:rounded-xl"
       />
-      <select name="job_id" defaultValue="" className={inputClass}>
-        <option value="">Which job? (or let BrushBooks work it out)</option>
-        {jobs.map((j) => (
-          <option key={j.id} value={j.id}>{j.address ?? j.client_name ?? j.code} ({j.code})</option>
-        ))}
-      </select>
+      {jobId ? (
+        <input type="hidden" name="job_id" value={jobId} />
+      ) : (
+        <select name="job_id" defaultValue="" className={inputClass}>
+          <option value="">Which job? (or let BrushBooks work it out)</option>
+          {jobs.map((j) => (
+            <option key={j.id} value={j.id}>{j.address ?? j.client_name ?? j.code}</option>
+          ))}
+        </select>
+      )}
       <button disabled={pending} className={`${buttonClass} w-full`}>{pending ? 'Reading invoice…' : 'Upload'}</button>
       {message && <p className="text-sm font-medium">{message}</p>}
     </form>

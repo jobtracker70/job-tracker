@@ -20,6 +20,8 @@ const LATE_HOUR = 19
 const sydneyHour = (ts: string) =>
   Number(new Intl.DateTimeFormat('en-AU', { hour: 'numeric', hourCycle: 'h23', timeZone: 'Australia/Sydney' }).format(new Date(ts)))
 
+const lowerFirst = (t: string) => t.charAt(0).toLowerCase() + t.slice(1)
+
 type Row = {
   id: string; start_time: string; end_time: string | null; needs_review: boolean; review_reason: string | null; edited_by: string | null
   workers: { name: string } | null; jobs: { id: string; code: string; address: string | null } | null
@@ -39,7 +41,7 @@ export async function shiftsToCheck(supabase: Supabase): Promise<ShiftToCheck[]>
       id: r.id, workerName: name, jobId: r.jobs?.id ?? '', jobLabel: r.jobs?.address ?? r.jobs?.code ?? 'a job', start: r.start_time, end: r.end_time,
     }
     if (r.needs_review) {
-      out.push({ ...base, reason: r.review_reason?.startsWith('Forgot') ? `forgot to sign out. Set to ${r.end_time ? fmtClock(r.end_time) : '8h'}.` : r.review_reason ?? 'needs checking.' })
+      out.push({ ...base, reason: r.review_reason?.startsWith('Forgot') ? `forgot to sign out. Set to ${r.end_time ? fmtClock(r.end_time) : '8h'}.` : lowerFirst(r.review_reason ?? 'needs checking.') })
       continue
     }
     if (r.edited_by) continue // already checked or changed by the owner

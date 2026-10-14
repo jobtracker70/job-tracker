@@ -114,14 +114,14 @@ export function Collapsible({ title, summary, summaryTone, children, open = fals
 }) {
   return (
     <details open={open} className="group border-b border-line last:border-0">
-      <summary className="flex items-center justify-between gap-3 px-4 py-3.5 cursor-pointer hover:bg-page/60">
+      <summary className="flex items-center justify-between gap-3 px-4 py-4 cursor-pointer hover:bg-page/60">
         <span>
-          <span className="block font-semibold">{title}</span>
+          <span className="block text-[17px] font-bold text-ink">{title}</span>
           {summary && <span className={`block text-sm ${summaryTone === 'bad' ? 'text-bad' : summaryTone === 'good' ? 'text-good' : 'text-muted'}`}>{summary}</span>}
         </span>
-        <span className="text-faint transition group-open:rotate-90">›</span>
+        <span className="text-faint text-xl transition group-open:rotate-90">›</span>
       </summary>
-      <div className="px-4 pb-4">{children}</div>
+      <div className="mx-3 mb-3 rounded-xl bg-page/70 border border-line px-3 py-2 text-ink">{children}</div>
     </details>
   )
 }

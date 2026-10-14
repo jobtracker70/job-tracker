@@ -31,8 +31,8 @@ export default async function InboxPage() {
   const supabase = createServiceClient()
   const [{ data: pendingData }, { data: recentData }, { data: jobs }, { data: subbies }, { data: lastEmail }] = await Promise.all([
     supabase.from('expenses').select('*, jobs(code, address)').eq('status', 'pending').order('created_at', { ascending: false }),
-    supabase.from('expenses').select('*, jobs(code, address)').neq('status', 'pending').order('created_at', { ascending: false }).limit(25),
-    supabase.from('jobs').select('id, code, client_name, address, status').in('status', ['active', 'quoted', 'complete']).order('created_at', { ascending: false }),
+    supabase.from('expenses').select('*, jobs(code, address)').neq('status', 'pending').order('created_at', { ascending: false }).limit(60),
+    supabase.from('jobs').select('id, code, client_name, address, status').eq('status', 'active').order('created_at', { ascending: false }),
     supabase.from('workers').select('id, name').in('type', ['subbie', 'subbie_fixed']).eq('active', true).order('name'),
     supabase.from('processed_emails').select('processed_at').order('processed_at', { ascending: false }).limit(1).maybeSingle(),
   ])
@@ -40,8 +40,18 @@ export default async function InboxPage() {
   const recent = (recentData ?? []) as Expense[]
   const connected = emailConfigured()
 
+  // Recently added, grouped by job (newest job activity first)
+  const groups = new Map<string, { key: string; jobId: string | null; label: string; items: Expense[]; total: number }>()
+  for (const x of recent) {
+    const key = x.job_id ?? 'none'
+    const g = groups.get(key) ?? { key, jobId: x.job_id, label: x.jobs?.address ?? x.jobs?.code ?? 'No job', items: [], total: 0 }
+    g.items.push(x)
+    if (x.status !== 'rejected') g.total += Number(x.amount_ex_gst)
+    groups.set(key, g)
+  }
+
   const fileUrls = new Map<string, string>()
-  const paths = [...pending, ...recent].map((x) => x.image_path).filter((p): p is string => !!p)
+  const paths = pending.map((x) => x.image_path).filter((p): p is string => !!p)
   if (paths.length) {
     const { data } = await supabase.storage.from('invoices').createSignedUrls(paths, 3600)
     for (const d of data ?? []) if (d.path && d.signedUrl) fileUrls.set(d.path, d.signedUrl)
@@ -62,7 +72,7 @@ export default async function InboxPage() {
         <details className="group relative">
           <summary className={`${secondaryButtonClass} cursor-pointer`}>⇪ Upload invoice</summary>
           <div className={`${cardClass} absolute right-0 z-10 mt-2 w-[min(92vw,360px)] p-4`}>
-            <UploadInvoiceForm jobs={(jobs ?? []).filter((j) => j.status !== 'complete')} />
+            <UploadInvoiceForm jobs={jobs ?? []} />
           </div>
         </details>
       </div>
@@ -82,11 +92,13 @@ export default async function InboxPage() {
                     <p className="text-faint text-sm mt-0.5">
                       Received {fmtDate(x.created_at.slice(0, 10))}{x.source === 'whatsapp' ? ' · photo from a worker' : ''}
                       {url && <> · <a href={url} target="_blank" className="text-brand font-medium">Open file</a></>}
+                      {' · '}<Link href={`/inbox/${x.id}`} className="text-brand font-medium">See items</Link>
                     </p>
                   </div>
                   <select name="job_id" required defaultValue={x.job_id ?? ''} className={inputClass}>
                     <option value="" disabled>Choose a job</option>
                     {(jobs ?? []).map((j) => <option key={j.id} value={j.id}>{j.address ?? j.client_name ?? j.code}</option>)}
+                    {x.job_id && !(jobs ?? []).some((j) => j.id === x.job_id) && <option value={x.job_id}>{x.jobs?.address ?? x.jobs?.code ?? 'Current job'}</option>}
                   </select>
                   <details className="group">
                     <summary className="text-sm text-brand font-medium cursor-pointer">Edit details</summary>
@@ -129,34 +141,41 @@ export default async function InboxPage() {
         {!recent.length ? (
           <div className={`${cardClass} p-8 text-center text-muted`}>No invoices yet.</div>
         ) : (
-          <ul className={`${cardClass} divide-y divide-line`}>
-            {recent.map((x) => {
-              const url = x.image_path ? fileUrls.get(x.image_path) : null
-              return (
-                <li key={x.id} className={`flex items-center justify-between gap-3 px-4 py-3 ${x.status === 'rejected' ? 'opacity-50' : ''}`}>
-                  <span className="min-w-0 flex items-center gap-3">
-                    <span className="hidden sm:grid w-9 h-9 shrink-0 place-items-center rounded-xl bg-page text-muted">🧾</span>
-                    <span className="min-w-0">
-                      <span className="flex flex-wrap items-center gap-1.5">
-                        {url ? <a href={url} target="_blank" className="font-semibold hover:text-brand">{x.supplier ?? 'Unknown'}</a> : <span className="font-semibold">{x.supplier ?? 'Unknown'}</span>}
-                        {x.source === 'whatsapp' && <SmallTag>photo</SmallTag>}
-                        {x.is_credit && <SmallTag tone="good">credit</SmallTag>}
-                        {x.category === 'subbie' && <SmallTag>subbie</SmallTag>}
-                        {x.status === 'rejected' && <SmallTag>ignored</SmallTag>}
-                      </span>
-                      <span className="block text-sm text-muted truncate">
-                        {x.job_id && x.jobs ? <Link href={`/jobs/${x.job_id}`} className="hover:text-brand">{x.jobs.address ?? x.jobs.code}</Link> : 'No job'} · {fmtDate(x.expense_date)}
-                      </span>
-                    </span>
+          <div className="space-y-4">
+            {[...groups.values()].map((g) => (
+              <div key={g.key} className={cardClass}>
+                <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-line bg-page/60 rounded-t-2xl">
+                  <span className="min-w-0">
+                    <span className="block font-bold truncate">{g.label}</span>
+                    <span className="block text-xs text-muted">{g.items.length} invoice{g.items.length > 1 ? 's' : ''} · {money(g.total)} ex GST</span>
                   </span>
-                  <span className={`text-right shrink-0 font-semibold ${x.is_credit ? 'text-good' : ''}`}>
-                    {money(Number(x.amount_ex_gst))}
-                    <span className="block text-xs font-normal text-faint">ex GST</span>
-                  </span>
-                </li>
-              )
-            })}
-          </ul>
+                  {g.jobId && <Link href={`/jobs/${g.jobId}/invoices`} className="text-brand text-sm font-semibold shrink-0">All for this job →</Link>}
+                </div>
+                <ul className="divide-y divide-line">
+                  {g.items.map((x) => (
+                    <li key={x.id} className={x.status === 'rejected' ? 'opacity-50' : ''}>
+                      <Link href={`/inbox/${x.id}`} className="flex items-center justify-between gap-3 px-4 py-3 hover:bg-page/60">
+                        <span className="min-w-0">
+                          <span className="flex flex-wrap items-center gap-1.5">
+                            <span className="font-semibold text-sm">{x.supplier ?? 'Unknown'}</span>
+                            {x.source === 'whatsapp' && <SmallTag>photo</SmallTag>}
+                            {x.is_credit && <SmallTag tone="good">credit</SmallTag>}
+                            {x.category === 'subbie' && <SmallTag>subbie</SmallTag>}
+                            {x.status === 'rejected' && <SmallTag>ignored</SmallTag>}
+                          </span>
+                          <span className="block text-xs text-muted">{fmtDate(x.expense_date)}{x.invoice_number ? ` · #${x.invoice_number}` : ''}</span>
+                        </span>
+                        <span className="flex items-center gap-2 shrink-0">
+                          <span className={`text-sm font-semibold ${x.is_credit ? 'text-good' : ''}`}>{money(Number(x.amount_ex_gst))}</span>
+                          <span className="text-faint">›</span>
+                        </span>
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ))}
+          </div>
         )}
       </section>
     </div>

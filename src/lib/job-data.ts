@@ -10,7 +10,7 @@ export type JobEntry = {
 export type JobExpense = {
   id: string; supplier: string | null; total: number; gst: number | null; amount_ex_gst: number; is_credit: boolean
   hours: number | null; expense_date: string | null; status: string; category: string; worker_id: string | null
-  invoice_number: string | null; image_path: string | null; source: string; note: string | null
+  invoice_number: string | null; image_path: string | null; source: string; note: string | null; line_items: unknown
 }
 export type SubbieRow = { key: string; name: string; fixed: boolean; logged: number; invoiced: number; amount: number; linked: boolean }
 
@@ -21,11 +21,11 @@ export async function loadJob(id: string) {
   const [{ data: summary }, { data: job }, { data: entriesData }, { data: expensesData }, { data: variations }, { data: subbies }] =
     await Promise.all([
       supabase.from('job_summary').select('*').eq('id', id).maybeSingle(),
-      supabase.from('jobs').select('quote_pdf_path, po_ref, decided_at, completed_at').eq('id', id).maybeSingle(),
+      supabase.from('jobs').select('quote_pdf_path, po_ref, decided_at, completed_at, day_start, day_end').eq('id', id).maybeSingle(),
       supabase.from('time_entry_costs').select('*').eq('job_id', id).order('start_time', { ascending: false }),
       supabase
         .from('expenses')
-        .select('id, supplier, total, gst, amount_ex_gst, is_credit, hours, expense_date, status, category, worker_id, invoice_number, image_path, source, note')
+        .select('id, supplier, total, gst, amount_ex_gst, is_credit, hours, expense_date, status, category, worker_id, invoice_number, image_path, source, note, line_items')
         .eq('job_id', id)
         .order('expense_date', { ascending: false }),
       supabase.from('variations').select('id, description, amount, hours, materials, created_at').eq('job_id', id).order('created_at'),
@@ -69,4 +69,58 @@ export async function loadJob(id: string) {
   const f = forecast(j, nums)
 
   return { j, job, entries, expenses, variations: variations ?? [], subbieRows, nums, f, supabase }
+}
+
+// Monday (YYYY-MM-DD) of the week a work day falls in
+export function weekOf(day: string) {
+  const d = new Date(`${day}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7))
+  return d.toISOString().slice(0, 10)
+}
+
+export type PersonWeek = { week: string; days: number; hours: number; cost: number; shifts: number }
+export type PersonSummary = {
+  workerId: string; name: string; type: string; hours: number; cost: number; shifts: number; days: number
+  weeks: PersonWeek[]; firstDay: string; lastDay: string
+}
+
+// Hours on a job per person, and per person per week (newest week first)
+export function peopleOnJob(entries: JobEntry[]): PersonSummary[] {
+  const map = new Map<string, PersonSummary & { daySet: Set<string>; weekMap: Map<string, PersonWeek & { daySet: Set<string> }> }>()
+  for (const e of entries) {
+    const p = map.get(e.worker_id) ?? {
+      workerId: e.worker_id, name: e.worker_name, type: e.worker_type, hours: 0, cost: 0, shifts: 0, days: 0,
+      weeks: [], firstDay: e.work_day, lastDay: e.work_day, daySet: new Set<string>(), weekMap: new Map(),
+    }
+    p.hours += Number(e.paid_hours)
+    p.cost += Number(e.cost)
+    p.shifts++
+    p.daySet.add(e.work_day)
+    if (e.work_day < p.firstDay) p.firstDay = e.work_day
+    if (e.work_day > p.lastDay) p.lastDay = e.work_day
+    const wk = weekOf(e.work_day)
+    const w = p.weekMap.get(wk) ?? { week: wk, days: 0, hours: 0, cost: 0, shifts: 0, daySet: new Set<string>() }
+    w.hours += Number(e.paid_hours)
+    w.cost += Number(e.cost)
+    w.shifts++
+    w.daySet.add(e.work_day)
+    p.weekMap.set(wk, w)
+    map.set(e.worker_id, p)
+  }
+  return [...map.values()]
+    .map(({ daySet, weekMap, ...p }) => ({
+      ...p,
+      days: daySet.size,
+      weeks: [...weekMap.values()].map(({ daySet: ds, ...w }) => ({ ...w, days: ds.size })).sort((a, b) => b.week.localeCompare(a.week)),
+    }))
+    .sort((a, b) => b.hours - a.hours)
+}
+
+// "6 Oct – 12 Oct"
+export function weekLabel(monday: string) {
+  const s = new Date(`${monday}T00:00:00Z`)
+  const e = new Date(s)
+  e.setUTCDate(e.getUTCDate() + 6)
+  const f = (d: Date) => d.toLocaleDateString('en-AU', { day: 'numeric', month: 'short', timeZone: 'UTC' })
+  return `${f(s)} – ${f(e)}`
 }
