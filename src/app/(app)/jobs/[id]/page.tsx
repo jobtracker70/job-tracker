@@ -1,11 +1,11 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
-import { HEALTH_COLOR, HEALTH_LABEL } from '@/lib/forecast'
 import { isSubbieType, loadJob } from '@/lib/job-data'
-import { fmtDate, fmtDateTime, hrs, money, todaySydney } from '@/lib/format'
+import { FINISHED, jobPill, jobSentence, jobSubtitle, jobTitle } from '@/lib/status'
+import { fmtClock, fmtDate, hrs, money, moneyCents, todaySydney } from '@/lib/format'
 import {
-  BudgetBar, Card, Empty, SectionTitle, Stat, StatusBadge,
-  buttonClass, dangerButtonClass, inputClass, secondaryButtonClass,
+  AlertBar, Collapsible, Pill, ProgressBar, SmallTag,
+  buttonClass, cardClass, dangerButtonClass, inputClass, secondaryButtonClass,
 } from '@/components/ui'
 import { acceptQuote, addVariation, deleteVariation, rejectQuote, setJobStatus, updateJob } from './actions'
 
@@ -18,361 +18,287 @@ export default async function JobPage({ params, searchParams }: { params: Promis
   if (!data) notFound()
   const { j, job, entries, expenses, variations, subbieRows, nums, f, supabase } = data
 
+  const pill = jobPill(j, f)
   const pdfUrl = job.quote_pdf_path
     ? (await supabase.storage.from('quotes').createSignedUrl(job.quote_pdf_path, 3600)).data?.signedUrl
     : null
+  const finished = FINISHED.includes(j.status)
+
+  const people = new Set(entries.map((e) => e.worker_id)).size
+  const counted = expenses.filter((x) => x.status !== 'rejected')
+  const invoicesTotal = counted.reduce((s, x) => s + Number(x.amount_ex_gst), 0)
+  const subbieMismatch = subbieRows.some((r) => !r.fixed && r.invoiced > 0 && Math.abs(r.invoiced - r.logged) >= 0.5)
+
+  const editForm = (
+    <form action={updateJob.bind(null, id)} className="grid sm:grid-cols-2 gap-3">
+      <Field label="Job code" name="code" defaultValue={j.code} />
+      <Field label="Client" name="client_name" defaultValue={j.client_name} />
+      <div className="sm:col-span-2"><Field label="Address" name="address" defaultValue={j.address} /></div>
+      <Field label="Quote total ($ ex GST)" name="quote_total" defaultValue={j.quote_total} />
+      <Field label="Quoted labour hours" name="quoted_hours" defaultValue={j.quoted_hours} />
+      <Field label="Quoted materials ($ ex GST)" name="quoted_materials" defaultValue={j.quoted_materials} />
+      <div />
+      <Field label="Start date" name="start_date" type="date" defaultValue={j.start_date} />
+      <Field label="Finish date" name="planned_finish" type="date" defaultValue={j.planned_finish} />
+      <div className="sm:col-span-2 flex flex-wrap items-center gap-3">
+        <button className={buttonClass}>Save changes</button>
+        {pdfUrl && <a href={pdfUrl} target="_blank" className="text-brand text-sm font-medium hover:underline">Open quote PDF</a>}
+      </div>
+    </form>
+  )
 
   return (
-    <div className="space-y-8">
-      {codeError && (
-        <div className="bg-red-900/30 border border-red-700 rounded-lg px-4 py-3 text-red-300 text-sm">
-          {codeError === 'used'
-            ? 'That job code is already used by another job. Nothing was saved. Pick a different code.'
-            : 'The job code must be 2–24 letters, numbers or dashes. Nothing was saved.'}
-        </div>
-      )}
-
-      {j.entries_to_review > 0 && (
-        <div className="bg-red-900/30 border border-red-700 rounded-lg px-4 py-3 text-red-300 text-sm">
-          {j.entries_to_review} shift{j.entries_to_review === 1 ? '' : 's'} on this job need checking (forgotten sign-outs).{' '}
-          <Link href={`/hours?job=${id}`} className="underline">Check hours →</Link>
-        </div>
-      )}
-
-      {/* Header */}
+    <div className="space-y-5">
       <div>
-        <Link href="/" className="text-gray-400 hover:text-white text-sm">← All jobs</Link>
-        <div className="flex flex-wrap items-start justify-between gap-4 mt-3">
-          <div>
-            <div className="flex items-center gap-3">
-              <span className="text-blue-400 font-mono font-bold text-lg">{j.code}</span>
-              <StatusBadge status={j.status} />
+        <Link href={j.status === 'quoted' ? '/?tab=quotes' : finished || j.status === 'rejected' ? '/?tab=finished' : '/'} className="text-brand text-sm font-medium hover:underline">← Jobs</Link>
+        <div className="flex items-start justify-between gap-3 mt-1">
+          <div className="min-w-0">
+            <h1 className="text-[26px] md:text-[32px] font-bold leading-tight">{jobTitle(j)}</h1>
+            <p className="text-muted">{jobSubtitle(j)}{job.po_ref && ` · PO ${job.po_ref}`}</p>
+          </div>
+          <Pill tone={pill.tone}>{pill.label}</Pill>
+        </div>
+      </div>
+
+      {codeError && (
+        <AlertBar>{codeError === 'used' ? 'That job code is already used by another job. Nothing was saved.' : 'Job codes are 2–24 letters, numbers or dashes. Nothing was saved.'}</AlertBar>
+      )}
+      {j.entries_to_review > 0 && (
+        <AlertBar action={<Link href={`/hours?job=${id}`} className="bg-white rounded-xl px-3 py-1.5 text-sm font-semibold">Fix hours →</Link>}>
+          {j.entries_to_review} shift{j.entries_to_review > 1 ? 's' : ''} need{j.entries_to_review > 1 ? '' : 's'} checking
+        </AlertBar>
+      )}
+
+      {/* Waiting quote: decide */}
+      {j.status === 'quoted' ? (
+        <>
+          <div className={`${cardClass} p-5 flex items-center justify-between`}>
+            <span className="text-muted">Quote (ex GST)</span>
+            <span className="text-2xl font-bold">{money(nums.income)}</span>
+          </div>
+          <div className="grid md:grid-cols-2 gap-4">
+            <form action={acceptQuote.bind(null, id)} className={`${cardClass} p-5 space-y-3`}>
+              <h2 className="text-lg font-bold">Accept quote</h2>
+              <Field label="Start date" name="start_date" type="date" defaultValue={todaySydney()} required />
+              <Field label="Finish date (optional)" name="planned_finish" type="date" defaultValue={null} />
+              <Field label="Painters on the job" name="crew_size" type="number" defaultValue={2} />
+              <p className="text-faint text-xs">No finish date? It&apos;s worked out from the quoted hours ({hrs(j.quoted_hours)}).</p>
+              <button className={`${buttonClass} w-full`}>Start job</button>
+            </form>
+            <form action={rejectQuote.bind(null, id)} className={`${cardClass} p-5 space-y-3`}>
+              <h2 className="text-lg font-bold">Reject quote</h2>
+              <label className="block">
+                <span className="text-sm font-medium">Why was it rejected?</span>
+                <textarea name="reason" required rows={5} placeholder="e.g. Too expensive, went with another painter" className={`${inputClass} mt-1.5`} />
+              </label>
+              <button className={`${dangerButtonClass} w-full`}>Reject quote</button>
+            </form>
+          </div>
+          <div className={cardClass}>
+            <Collapsible title="Edit job details" summary="Code, client, address, quoted hours and materials">{editForm}</Collapsible>
+          </div>
+        </>
+      ) : (
+        <div className="grid md:grid-cols-2 gap-5 items-start">
+          {/* Left: the answer */}
+          <div className="space-y-4">
+            <div className={`${cardClass} p-5`}>
+              <div className="grid grid-cols-3 gap-3">
+                <Money label="Income" value={nums.income} />
+                <Money label={finished ? 'Costs' : 'Costs so far'} value={nums.costs} />
+                <Money label="Profit" value={nums.profit} tone={nums.profit >= 0 ? 'good' : 'bad'} />
+              </div>
+              <p className="text-sm text-muted mt-4 pt-4 border-t border-line">
+                Margin <strong className="text-ink">{nums.margin == null ? '—' : `${Math.round(nums.margin * 100)}%`}</strong>
+                {!finished && ' so far'} · all ex GST
+              </p>
+            </div>
+
+            <div className="bg-brand-tint border border-brand/15 rounded-2xl p-4 text-ink">{jobSentence(j, nums, f)}</div>
+
+            <div className={`${cardClass} p-5 space-y-4`}>
+              <ProgressBar label="Hours" used={nums.hoursUsed} budget={nums.hoursBudget} format={hrs} />
+              <ProgressBar label="Materials" used={nums.materialsCost} budget={nums.materialsBudget} format={money} />
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <Link href={`/jobs/${id}/report`} className={secondaryButtonClass}>Job report</Link>
               {j.status === 'active' && (
-                <span className={`text-xs px-2 py-0.5 rounded-full ${HEALTH_COLOR[f.health]}`}>{HEALTH_LABEL[f.health]}</span>
+                <form action={setJobStatus.bind(null, id, 'complete')}><button className={`${buttonClass} w-full`}>Mark finished</button></form>
+              )}
+              {finished && (
+                <form action={setJobStatus.bind(null, id, 'active')}><button className={`${secondaryButtonClass} w-full`}>Reopen job</button></form>
+              )}
+              {j.status === 'rejected' && (
+                <form action={setJobStatus.bind(null, id, 'quoted')}><button className={`${secondaryButtonClass} w-full`}>Move back to quotes</button></form>
               )}
             </div>
-            <h1 className="text-2xl font-bold mt-1">{j.client_name ?? 'Unnamed job'}</h1>
-            {j.address && <p className="text-gray-400">{j.address}</p>}
-            <p className="text-gray-500 text-sm mt-1">
-              {j.start_date && <>Start {fmtDate(j.start_date)} · Finish {fmtDate(j.planned_finish)} · </>}
-              {job.po_ref && <>PO {job.po_ref} · </>}
-              {pdfUrl && <a href={pdfUrl} target="_blank" className="text-blue-400 hover:underline">Quote PDF</a>}
-            </p>
           </div>
-          <div className="flex flex-wrap gap-2">
-            {j.status !== 'quoted' && j.status !== 'rejected' && (
-              <Link href={`/jobs/${id}/report`} className={secondaryButtonClass}>
-                {['complete', 'invoiced', 'paid'].includes(j.status) ? 'Final job report' : 'Job report so far'}
-              </Link>
-            )}
-            {j.status === 'active' && (
-              <form action={setJobStatus.bind(null, id, 'complete')}><button className={secondaryButtonClass}>Mark finished</button></form>
-            )}
-            {['complete', 'invoiced', 'paid'].includes(j.status) && (
-              <form action={setJobStatus.bind(null, id, 'active')}><button className={secondaryButtonClass}>Reopen</button></form>
-            )}
-            {j.status === 'rejected' && (
-              <form action={setJobStatus.bind(null, id, 'quoted')}><button className={secondaryButtonClass}>Move back to waiting</button></form>
-            )}
-          </div>
-        </div>
-      </div>
 
-      {/* Decision */}
-      {j.status === 'quoted' && (
-        <div className="grid md:grid-cols-2 gap-4">
-          <Card>
-            <h2 className="font-semibold text-green-400 mb-3">Accept quote</h2>
-            <form action={acceptQuote.bind(null, id)} className="space-y-3">
-              <label className="block text-sm">
-                <span className="text-gray-300">Start date</span>
-                <input type="date" name="start_date" required defaultValue={todaySydney()} className={`${inputClass} mt-1`} />
-              </label>
-              <label className="block text-sm">
-                <span className="text-gray-300">Finish date <span className="text-gray-500">(optional)</span></span>
-                <input type="date" name="planned_finish" className={`${inputClass} mt-1`} />
-              </label>
-              <label className="block text-sm">
-                <span className="text-gray-300">Painters on the job</span>
-                <input type="number" name="crew_size" min={1} defaultValue={2} className={`${inputClass} mt-1`} />
-                <span className="text-gray-500 text-xs">
-                  If no finish date, it&apos;s worked out from the quoted hours ({hrs(j.quoted_hours)}) at 8h per painter per day.
-                </span>
-              </label>
-              <button className={`${buttonClass} w-full`}>Accept and start job</button>
-            </form>
-          </Card>
-          <Card>
-            <h2 className="font-semibold text-red-400 mb-3">Reject quote</h2>
-            <form action={rejectQuote.bind(null, id)} className="space-y-3">
-              <label className="block text-sm">
-                <span className="text-gray-300">Why was it rejected?</span>
-                <textarea name="reason" required rows={4} placeholder="e.g. Too expensive, went with another painter" className={`${inputClass} mt-1`} />
-              </label>
-              <button className={`${dangerButtonClass} w-full`}>Reject — move to Missed projects</button>
-            </form>
-          </Card>
-        </div>
-      )}
+          {/* Right: details on tap */}
+          <div className={cardClass}>
+            <Collapsible title="Hours worked" summary={entries.length ? `${people} ${people === 1 ? 'person' : 'people'}, ${hrs(nums.hoursUsed)}` : 'No sign-ins yet'}>
+              {!entries.length ? (
+                <p className="text-sm text-muted">Workers sign in on WhatsApp and pick this job.</p>
+              ) : (
+                <ul className="divide-y divide-line">
+                  {entries.slice(0, 40).map((e) => (
+                    <li key={e.id} className="py-2.5 flex items-center justify-between gap-3 text-sm">
+                      <span className="min-w-0">
+                        <span className="font-semibold">{e.worker_name}</span>
+                        <span className="block text-muted">
+                          {fmtDate(e.work_day)}, {fmtClock(e.start_time)}–{e.end_time ? fmtClock(e.end_time) : 'now'}
+                        </span>
+                        <span className="flex flex-wrap gap-1 mt-1">
+                          {e.needs_review && <SmallTag tone="bad">check</SmallTag>}
+                          {e.is_weekend && <SmallTag tone="brand">weekend</SmallTag>}
+                          {Number(e.overtime_hours) > 0.01 && <SmallTag tone="brand">{hrs(Number(e.overtime_hours))} overtime</SmallTag>}
+                          {isSubbieType(e.worker_type) && <SmallTag>subbie</SmallTag>}
+                        </span>
+                      </span>
+                      <span className="text-right shrink-0">
+                        <span className="font-semibold block">{hrs(Number(e.paid_hours))}</span>
+                        <span className="text-faint">{isSubbieType(e.worker_type) ? 'invoice' : money(Number(e.cost))}</span>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <Link href={`/hours?job=${id}`} className="inline-block mt-3 text-brand text-sm font-semibold">Add or fix hours →</Link>
+            </Collapsible>
 
-      {j.status === 'rejected' && (
-        <Card>
-          <p className="text-sm text-gray-400">Quoted {fmtDate(j.created_at)}</p>
-          <p className="mt-1"><span className="text-red-400">Why: </span>{j.rejection_reason ?? '—'}</p>
-        </Card>
-      )}
+            <Collapsible title="Invoices" summary={counted.length ? `${counted.length} invoice${counted.length > 1 ? 's' : ''}, ${money(invoicesTotal)}` : 'No invoices yet'}>
+              {!expenses.length ? (
+                <p className="text-sm text-muted">They arrive from the receipts email, from workers&apos; WhatsApp photos, or you can upload one.</p>
+              ) : (
+                <ul className="divide-y divide-line">
+                  {expenses.map((x) => (
+                    <li key={x.id} className={`py-2.5 flex items-center justify-between gap-3 text-sm ${x.status === 'rejected' ? 'opacity-40 line-through' : ''}`}>
+                      <span className="min-w-0">
+                        <span className="font-semibold">{x.supplier ?? 'Unknown'}</span>
+                        <span className="block text-muted">{fmtDate(x.expense_date)}{x.hours ? ` · ${hrs(Number(x.hours))}` : ''}</span>
+                        <span className="flex flex-wrap gap-1 mt-1">
+                          {x.status === 'pending' && <SmallTag tone="warn">needs checking</SmallTag>}
+                          {x.source === 'whatsapp' && <SmallTag>photo</SmallTag>}
+                          {x.category === 'subbie' && <SmallTag>subbie</SmallTag>}
+                          {x.is_credit && <SmallTag tone="good">credit</SmallTag>}
+                        </span>
+                      </span>
+                      <span className={`text-right shrink-0 font-semibold ${x.is_credit ? 'text-good' : ''}`}>
+                        {moneyCents(Number(x.amount_ex_gst))}
+                        <span className="block text-faint text-xs font-normal">ex GST</span>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <Link href="/inbox" className="inline-block mt-3 text-brand text-sm font-semibold">Upload or check invoices →</Link>
+            </Collapsible>
 
-      {/* Money */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <Stat label="Income ex GST (quote + variations)" value={money(nums.income)} />
-        <Stat label="Costs so far (ex GST)" value={money(nums.costs)} sub={`Labour ${money(nums.labourCost)} · Materials ${money(nums.materialsCost)}`} />
-        <Stat label="Profit so far" value={money(nums.profit)} tone={nums.profit >= 0 ? 'green' : 'red'} />
-        <Stat
-          label="Margin so far"
-          value={nums.margin == null ? '—' : `${Math.round(nums.margin * 100)}%`}
-          tone={nums.margin == null ? undefined : nums.margin >= 0.3 ? 'green' : nums.margin >= 0.15 ? 'yellow' : 'red'}
-        />
-      </div>
+            <Collapsible
+              title="Subbies"
+              summary={!subbieRows.length ? 'No subbies yet' : `${subbieRows.length} subbie${subbieRows.length > 1 ? 's' : ''}, ${subbieMismatch ? 'hours don’t match' : 'hours match ✓'}`}
+              summaryTone={subbieMismatch ? 'bad' : subbieRows.length ? 'good' : undefined}
+            >
+              {!subbieRows.length ? (
+                <p className="text-sm text-muted">Subbie sign-ins and invoices show here.</p>
+              ) : (
+                <ul className="divide-y divide-line">
+                  {subbieRows.map((r) => {
+                    const diff = r.invoiced - r.logged
+                    const flag = !r.fixed && r.invoiced > 0 && Math.abs(diff) >= 0.5
+                    return (
+                      <li key={r.key} className="py-2.5 text-sm">
+                        <div className="flex justify-between gap-3">
+                          <span className="font-semibold">{r.name}</span>
+                          <span className={r.fixed ? 'text-faint' : flag ? (diff > 0 ? 'text-bad font-semibold' : 'text-warn font-semibold') : 'text-good font-semibold'}>
+                            {r.fixed ? 'Fixed price' : !r.invoiced ? 'Not invoiced yet' : flag ? `${diff > 0 ? '+' : ''}${hrs(diff)}` : 'Matches ✓'}
+                          </span>
+                        </div>
+                        <p className="text-muted">
+                          Signed in {hrs(r.logged)}{!r.fixed && r.invoiced ? ` · invoiced ${hrs(r.invoiced)}` : ''}{r.amount ? ` · ${money(r.amount)}` : ''}
+                        </p>
+                        {!r.linked && <p className="text-warn text-xs mt-0.5">Not matched to a subbie. Add them on the Workers page.</p>}
+                      </li>
+                    )
+                  })}
+                </ul>
+              )}
+            </Collapsible>
 
-      {/* Budget */}
-      <section>
-        <SectionTitle>Budget</SectionTitle>
-        <Card className="space-y-5">
-          <BudgetBar label="Labour hours" used={nums.hoursUsed} budget={nums.hoursBudget} format={hrs} />
-          <BudgetBar label="Materials" used={nums.materialsCost} budget={nums.materialsBudget} format={money} />
-          {nums.hoursBudget == null && (
-            <p className="text-sm text-yellow-400">No labour hours on this quote yet — add them under &quot;Edit job details&quot; below.</p>
-          )}
-        </Card>
-      </section>
-
-      {/* Forecast */}
-      {j.status === 'active' && (
-        <section>
-          <SectionTitle>Forecast</SectionTitle>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            <Stat label="Time gone" value={f.timePct == null ? '—' : `${Math.round(f.timePct * 100)}%`} sub="of planned working days" />
-            <Stat
-              label="Hours used"
-              value={f.hoursPct == null ? '—' : `${Math.round(f.hoursPct * 100)}%`}
-              sub="of hours budget"
-              tone={f.health === 'over' ? 'red' : f.health === 'behind' ? 'yellow' : undefined}
-            />
-            <Stat
-              label="Hours at finish (at this pace)"
-              value={f.projectedHours == null ? '—' : hrs(f.projectedHours)}
-              sub={nums.hoursBudget != null ? `budget ${hrs(nums.hoursBudget)}` : undefined}
-              tone={f.projectedHours != null && nums.hoursBudget != null && f.projectedHours > nums.hoursBudget ? 'red' : undefined}
-            />
-            <Stat
-              label="Projected profit"
-              value={money(f.projectedProfit)}
-              sub={f.projectedProfit == null ? 'needs worker rates or subbie invoices' : undefined}
-              tone={f.projectedProfit == null ? undefined : f.projectedProfit >= 0 ? 'green' : 'red'}
-            />
-          </div>
-          {f.budgetRunsOut && (
-            <p className="text-sm text-gray-400 mt-3">
-              At the current pace the hours budget runs out around{' '}
-              <span className={j.planned_finish && f.budgetRunsOut < j.planned_finish ? 'text-red-400 font-medium' : 'text-gray-200'}>
-                {fmtDate(f.budgetRunsOut)}
-              </span>{' '}
-              (planned finish {fmtDate(j.planned_finish)}).
-            </p>
-          )}
-        </section>
-      )}
-
-      {/* Subbie hours check */}
-      <section>
-        <SectionTitle>Subbie hours check</SectionTitle>
-        {subbieRows.length === 0 ? (
-          <Empty>No subbie hours or invoices on this job yet.</Empty>
-        ) : (
-          <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-gray-800 text-gray-400">
-                  <th className="text-left px-4 py-3 font-medium">Subbie</th>
-                  <th className="text-right px-4 py-3 font-medium">Logged on WhatsApp</th>
-                  <th className="text-right px-4 py-3 font-medium">Invoiced</th>
-                  <th className="text-right px-4 py-3 font-medium">Difference</th>
-                </tr>
-              </thead>
-              <tbody>
-                {subbieRows.map((r) => {
-                  const diff = r.invoiced - r.logged
-                  const flag = !r.fixed && r.invoiced > 0 && Math.abs(diff) >= 0.5
-                  return (
-                    <tr key={r.key} className="border-b border-gray-800/50 last:border-0">
-                      <td className="px-4 py-3">
-                        {r.name}
-                        {r.fixed && <span className="block text-xs text-gray-500">Fixed price {r.amount ? `· ${money(r.amount)} invoiced` : ''} — hours for info only</span>}
-                        {!r.linked && <span className="block text-xs text-yellow-400">Not matched to a subbie — add them on the Workers page</span>}
-                      </td>
-                      <td className="px-4 py-3 text-right font-mono">{hrs(r.logged)}</td>
-                      <td className="px-4 py-3 text-right font-mono">{r.fixed ? '—' : r.invoiced ? hrs(r.invoiced) : 'Not yet'}</td>
-                      <td className={`px-4 py-3 text-right font-mono ${r.fixed ? 'text-gray-500' : flag ? (diff > 0 ? 'text-red-400' : 'text-yellow-400') : 'text-green-400'}`}>
-                        {r.fixed ? 'n/a' : r.invoiced ? (flag ? `${diff > 0 ? '+' : ''}${hrs(diff)}` : 'Matches') : '—'}
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-            <p className="text-xs text-gray-500 px-4 py-2 border-t border-gray-800">
-              Red = invoiced more hours than logged on WhatsApp. Yellow = invoiced fewer.
-            </p>
-          </div>
-        )}
-      </section>
-
-      {/* Variations */}
-      <section>
-        <SectionTitle>Variations</SectionTitle>
-        <div className="space-y-3">
-          {(variations ?? []).map((v) => (
-            <div key={v.id} className="bg-gray-900 border border-gray-800 rounded-xl px-4 py-3 flex flex-wrap items-center gap-x-6 gap-y-1 text-sm">
-              <span className="flex-1 min-w-48">{v.description}</span>
-              <span className="text-gray-300">+{money(Number(v.amount))} income</span>
-              <span className="text-gray-300">+{hrs(Number(v.hours))}</span>
-              <span className="text-gray-300">+{money(Number(v.materials))} materials</span>
-              <form action={deleteVariation.bind(null, id, v.id)}>
-                <button className="text-gray-500 hover:text-red-400">Remove</button>
+            <Collapsible
+              title="Extras"
+              summary={variations.length ? `${variations.length} extra${variations.length > 1 ? 's' : ''}, +${money(Number(j.variations_total))}` : 'No extras added'}
+            >
+              {variations.length > 0 && (
+                <ul className="divide-y divide-line mb-3">
+                  {variations.map((v) => (
+                    <li key={v.id} className="py-2.5 flex items-center justify-between gap-3 text-sm">
+                      <span className="min-w-0">
+                        <span className="font-semibold">{v.description}</span>
+                        <span className="block text-muted">+{money(Number(v.amount))} · +{hrs(Number(v.hours))} · +{money(Number(v.materials))} materials</span>
+                      </span>
+                      <form action={deleteVariation.bind(null, id, v.id)}><button className="text-faint hover:text-bad text-sm">Remove</button></form>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <form action={addVariation.bind(null, id)} className="grid grid-cols-3 gap-2">
+                <input name="description" required placeholder="What extra work? e.g. Paint extra bedroom" className={`${inputClass} col-span-3`} />
+                <input name="amount" inputMode="decimal" placeholder="Charge $" className={inputClass} />
+                <input name="hours" inputMode="decimal" placeholder="Hours" className={inputClass} />
+                <input name="materials" inputMode="decimal" placeholder="Materials $" className={inputClass} />
+                <button className={`${buttonClass} col-span-3`}>Add extra</button>
               </form>
-            </div>
-          ))}
-          <Card>
-            <form action={addVariation.bind(null, id)} className="grid grid-cols-2 md:grid-cols-5 gap-3 items-end">
-              <label className="col-span-2 text-sm">
-                <span className="text-gray-300">Variation</span>
-                <input name="description" required placeholder="e.g. Paint extra bedroom" className={`${inputClass} mt-1`} />
-              </label>
-              <label className="text-sm">
-                <span className="text-gray-300">Extra charge ($ ex GST)</span>
-                <input name="amount" inputMode="decimal" placeholder="0" className={`${inputClass} mt-1`} />
-              </label>
-              <label className="text-sm">
-                <span className="text-gray-300">Extra hours</span>
-                <input name="hours" inputMode="decimal" placeholder="0" className={`${inputClass} mt-1`} />
-              </label>
-              <label className="text-sm">
-                <span className="text-gray-300">Extra materials ($ ex GST)</span>
-                <input name="materials" inputMode="decimal" placeholder="0" className={`${inputClass} mt-1`} />
-              </label>
-              <button className={`${buttonClass} col-span-2 md:col-span-5`}>Add variation — budget updates automatically</button>
-            </form>
-          </Card>
+              <p className="text-faint text-xs mt-2">Amounts ex GST. The budget updates automatically.</p>
+            </Collapsible>
+
+            {j.status === 'active' && (
+              <Collapsible title="More numbers" summary="Pace, projected hours and profit">
+                <dl className="grid grid-cols-2 gap-3 text-sm">
+                  <Num label="Time gone" value={f.timePct == null ? '—' : `${Math.round(f.timePct * 100)}%`} />
+                  <Num label="Hours used" value={f.hoursPct == null ? '—' : `${Math.round(f.hoursPct * 100)}%`} />
+                  <Num label="Hours at finish (this pace)" value={f.projectedHours == null ? '—' : hrs(f.projectedHours)} />
+                  <Num label="Projected profit" value={money(f.projectedProfit)} />
+                  <Num label="Planned dates" value={`${fmtDate(j.start_date)} → ${fmtDate(j.planned_finish)}`} />
+                  <Num label="Hours budget runs out" value={f.budgetRunsOut ? fmtDate(f.budgetRunsOut) : '—'} />
+                </dl>
+              </Collapsible>
+            )}
+
+            <Collapsible title="Edit job details" summary="Code, client, address, quoted hours and materials">{editForm}</Collapsible>
+          </div>
         </div>
-      </section>
-
-      {/* Labour log */}
-      <section>
-        <SectionTitle right={<Link href={`/hours?job=${id}`} className="text-sm text-blue-400 hover:underline">Add or fix hours →</Link>}>
-          Labour log
-        </SectionTitle>
-        {!entries.length ? (
-          <Empty>No clock-ins yet. Workers sign in on WhatsApp and pick this job from the list.</Empty>
-        ) : (
-          <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-gray-800 text-gray-400">
-                  <th className="text-left px-4 py-3 font-medium">Worker</th>
-                  <th className="text-left px-4 py-3 font-medium">Start</th>
-                  <th className="text-left px-4 py-3 font-medium">End</th>
-                  <th className="text-right px-4 py-3 font-medium">Paid hours</th>
-                  <th className="text-right px-4 py-3 font-medium">Cost</th>
-                </tr>
-              </thead>
-              <tbody>
-                {entries.slice(0, 50).map((e) => (
-                  <tr key={e.id} className="border-b border-gray-800/50 last:border-0">
-                    <td className="px-4 py-3">
-                      {e.worker_name}
-                      {isSubbieType(e.worker_type) && <span className="text-gray-500"> (subbie)</span>}
-                      {e.needs_review && <span className="ml-2 text-xs text-red-400">check</span>}
-                      {e.is_weekend && <span className="ml-2 text-xs text-purple-300">weekend</span>}
-                      {Number(e.overtime_hours) > 0.01 && <span className="ml-2 text-xs text-purple-300">{hrs(Number(e.overtime_hours))} OT</span>}
-                    </td>
-                    <td className="px-4 py-3 text-gray-300">{fmtDateTime(e.start_time)}</td>
-                    <td className="px-4 py-3 text-gray-300">{e.end_time ? fmtDateTime(e.end_time) : <span className="text-green-400">On site now</span>}</td>
-                    <td className="px-4 py-3 text-right font-mono">{hrs(Number(e.paid_hours))}</td>
-                    <td className="px-4 py-3 text-right font-mono text-gray-400">{isSubbieType(e.worker_type) ? 'invoice' : money(Number(e.cost))}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-
-      {/* Invoices */}
-      <section>
-        <SectionTitle right={<Link href="/inbox" className="text-sm text-blue-400 hover:underline">Upload or check invoices →</Link>}>
-          Materials &amp; subbie invoices
-        </SectionTitle>
-        {!expenses.length ? (
-          <Empty>No invoices yet. They arrive from the receipts email each morning, from workers&apos; WhatsApp photos, or upload one on the Invoices page.</Empty>
-        ) : (
-          <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-gray-800 text-gray-400">
-                  <th className="text-left px-4 py-3 font-medium">From</th>
-                  <th className="text-left px-4 py-3 font-medium">Date</th>
-                  <th className="text-left px-4 py-3 font-medium">Type</th>
-                  <th className="text-right px-4 py-3 font-medium">Hours</th>
-                  <th className="text-right px-4 py-3 font-medium">Amount ex GST</th>
-                </tr>
-              </thead>
-              <tbody>
-                {expenses.map((x) => (
-                  <tr key={x.id} className={`border-b border-gray-800/50 last:border-0 ${x.status === 'rejected' ? 'opacity-40 line-through' : ''}`}>
-                    <td className="px-4 py-3">
-                      {x.supplier ?? '—'}
-                      {x.status === 'pending' && <span className="ml-2 text-xs text-yellow-400">needs checking</span>}
-                      {x.source === 'whatsapp' && <span className="ml-2 text-xs text-gray-500">photo</span>}
-                    </td>
-                    <td className="px-4 py-3 text-gray-300">{fmtDate(x.expense_date)}</td>
-                    <td className="px-4 py-3"><span className="text-xs bg-gray-800 px-2 py-0.5 rounded">{x.category}</span></td>
-                    <td className="px-4 py-3 text-right font-mono">{x.hours ? hrs(Number(x.hours)) : ''}</td>
-                    <td className={`px-4 py-3 text-right font-mono ${x.is_credit ? 'text-green-400' : ''}`}>
-                      {money(Number(x.amount_ex_gst))}{x.is_credit && ' credit'}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
-
-      {/* Edit */}
-      <details className="bg-gray-900 border border-gray-800 rounded-xl">
-        <summary className="px-5 py-4 cursor-pointer font-semibold">Edit job details</summary>
-        <form action={updateJob.bind(null, id)} className="grid md:grid-cols-2 gap-3 px-5 pb-5">
-          <Field label="Job code (changing it affects how new invoices match)" name="code" defaultValue={j.code} />
-          <Field label="Client" name="client_name" defaultValue={j.client_name} />
-          <Field label="Address" name="address" defaultValue={j.address} />
-          <Field label="Quote total ($ ex GST)" name="quote_total" defaultValue={j.quote_total} />
-          <Field label="Quoted labour hours" name="quoted_hours" defaultValue={j.quoted_hours} />
-          <Field label="Quoted materials ($ ex GST)" name="quoted_materials" defaultValue={j.quoted_materials} />
-          <div />
-          <Field label="Start date" name="start_date" type="date" defaultValue={j.start_date} />
-          <Field label="Finish date" name="planned_finish" type="date" defaultValue={j.planned_finish} />
-          <button className={`${buttonClass} md:col-span-2`}>Save changes</button>
-        </form>
-      </details>
+      )}
     </div>
   )
 }
 
-function Field({ label, name, defaultValue, type = 'text' }: { label: string; name: string; defaultValue: string | number | null; type?: string }) {
+function Money({ label, value, tone }: { label: string; value: number; tone?: 'good' | 'bad' }) {
   return (
-    <label className="text-sm">
-      <span className="text-gray-300">{label}</span>
-      <input type={type} name={name} defaultValue={defaultValue ?? ''} className={`${inputClass} mt-1`} />
+    <div className="min-w-0">
+      <p className="text-sm text-muted">{label}</p>
+      <p className={`text-xl md:text-[26px] font-bold truncate ${tone === 'good' ? 'text-good' : tone === 'bad' ? 'text-bad' : ''}`}>{money(value)}</p>
+    </div>
+  )
+}
+
+function Num({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <dt className="text-muted">{label}</dt>
+      <dd className="font-semibold">{value}</dd>
+    </div>
+  )
+}
+
+function Field({ label, name, defaultValue, type = 'text', required }: {
+  label: string; name: string; defaultValue: string | number | null; type?: string; required?: boolean
+}) {
+  return (
+    <label className="block">
+      <span className="text-sm font-medium">{label}</span>
+      <input type={type} name={name} required={required} defaultValue={defaultValue ?? ''} className={`${inputClass} mt-1.5`} />
     </label>
   )
 }

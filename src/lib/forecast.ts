@@ -93,21 +93,3 @@ export function forecast(j: JobSummary, nums: JobNumbers, today = todaySydney())
 
   return { health, timePct, hoursPct, projectedHours, budgetRunsOut, projectedProfit }
 }
-
-export const HEALTH_LABEL: Record<Health, string> = {
-  not_started: 'Not started',
-  on_track: 'On track',
-  behind: 'Using hours too fast',
-  over: 'Over hours budget',
-  no_budget: 'No hours budget set',
-  no_dates: 'No dates set',
-}
-
-export const HEALTH_COLOR: Record<Health, string> = {
-  not_started: 'bg-gray-800 text-gray-300',
-  on_track: 'bg-green-900/50 text-green-400',
-  behind: 'bg-yellow-900/50 text-yellow-400',
-  over: 'bg-red-900/50 text-red-400',
-  no_budget: 'bg-gray-800 text-gray-400',
-  no_dates: 'bg-gray-800 text-gray-400',
-}

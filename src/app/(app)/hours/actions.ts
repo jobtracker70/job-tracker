@@ -67,7 +67,7 @@ export async function updateEntry(entryId: string, formData: FormData) {
 
 export async function markReviewed(entryId: string, back: string) {
   await requireAuth()
-  await createServiceClient().from('time_entries').update({ needs_review: false }).eq('id', entryId)
+  await createServiceClient().from('time_entries').update({ needs_review: false, edited_by: 'owner' }).eq('id', entryId)
   done(back)
 }
 

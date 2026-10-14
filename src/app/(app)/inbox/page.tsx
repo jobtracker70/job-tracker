@@ -1,8 +1,8 @@
 import Link from 'next/link'
 import { createServiceClient } from '@/lib/supabase'
 import { emailConfigured } from '@/lib/email'
-import { fmtDate, fmtDateTime, hrs, money } from '@/lib/format'
-import { Card, Empty, SectionTitle, buttonClass, dangerButtonClass, inputClass } from '@/components/ui'
+import { fmtDate, fmtDateTime, moneyCents as money } from '@/lib/format'
+import { SmallTag, buttonClass, cardClass, inputClass, secondaryButtonClass } from '@/components/ui'
 import { approveExpense, rejectExpense } from './actions'
 import { CheckEmailButton, UploadInvoiceForm } from './forms'
 
@@ -10,20 +10,30 @@ export const dynamic = 'force-dynamic'
 export const maxDuration = 60
 
 type Expense = {
-  id: string; job_id: string | null; supplier: string | null; supplier_abn: string | null; invoice_number: string | null
-  total: number; gst: number | null; amount_ex_gst: number; is_credit: boolean; note: string | null; submitted_by: string | null
+  id: string; job_id: string | null; supplier: string | null; invoice_number: string | null
+  total: number; gst: number | null; amount_ex_gst: number; is_credit: boolean; note: string | null
   expense_date: string | null; category: string; status: string; hours: number | null; worker_id: string | null
   job_code_raw: string | null; confidence: string | null; source: string; file_name: string | null
-  image_path: string | null; created_at: string; jobs: { code: string; client_name: string | null } | null
+  image_path: string | null; created_at: string; jobs: { code: string; address: string | null } | null
+}
+
+// Why the app couldn't file this invoice by itself, in plain words
+function reason(x: Expense) {
+  if (x.note) return 'it might be a repeat of one already added'
+  if (!x.job_id) return x.job_code_raw ? `job code "${x.job_code_raw}" doesn't match a job` : 'no job code on it'
+  if (x.category === 'subbie' && !x.worker_id) return "the subbie isn't on your Workers list"
+  if (x.category === 'subbie' && x.hours == null) return 'no hours on the subbie invoice'
+  if (x.confidence === 'low') return 'it was hard to read'
+  return 'please check it'
 }
 
 export default async function InboxPage() {
   const supabase = createServiceClient()
   const [{ data: pendingData }, { data: recentData }, { data: jobs }, { data: subbies }, { data: lastEmail }] = await Promise.all([
-    supabase.from('expenses').select('*, jobs(code, client_name)').eq('status', 'pending').order('created_at', { ascending: false }),
-    supabase.from('expenses').select('*, jobs(code, client_name)').neq('status', 'pending').order('created_at', { ascending: false }).limit(20),
-    supabase.from('jobs').select('id, code, client_name, status').in('status', ['active', 'quoted', 'complete']).order('created_at', { ascending: false }),
-    supabase.from('workers').select('id, name').eq('type', 'subbie').eq('active', true).order('name'),
+    supabase.from('expenses').select('*, jobs(code, address)').eq('status', 'pending').order('created_at', { ascending: false }),
+    supabase.from('expenses').select('*, jobs(code, address)').neq('status', 'pending').order('created_at', { ascending: false }).limit(25),
+    supabase.from('jobs').select('id, code, client_name, address, status').in('status', ['active', 'quoted', 'complete']).order('created_at', { ascending: false }),
+    supabase.from('workers').select('id, name').in('type', ['subbie', 'subbie_fixed']).eq('active', true).order('name'),
     supabase.from('processed_emails').select('processed_at').order('processed_at', { ascending: false }).limit(1).maybeSingle(),
   ])
   const pending = (pendingData ?? []) as Expense[]
@@ -38,107 +48,76 @@ export default async function InboxPage() {
   }
 
   return (
-    <div className="space-y-8">
-      <div>
-        <h1 className="text-2xl font-bold">Invoices</h1>
-        <p className="text-gray-400 text-sm mt-1">
-          Supplier and subbie invoices are read from the receipts email every morning, and workers can send receipt photos to the WhatsApp bot. All costs are counted ex GST; credit notes and returns reduce the job&apos;s cost; repeats are caught.
-          Anything the app isn&apos;t sure about waits here for you.
-        </p>
-      </div>
-
-      <div className="grid md:grid-cols-2 gap-4">
-        <Card>
-          <h2 className="font-semibold mb-1">Business email</h2>
-          {connected ? (
-            <p className="text-sm text-gray-400 mb-3">
-              Connected: <span className="text-gray-200">{process.env.IMAP_USER}</span>. Checked every morning at 7am.
-              {lastEmail && <> Last email read {fmtDateTime(lastEmail.processed_at)}.</>}
-            </p>
-          ) : (
-            <p className="text-sm text-yellow-400 mb-3">Not connected yet. Once it is, invoices arrive here automatically each morning.</p>
-          )}
-          <CheckEmailButton connected={connected} />
-        </Card>
-        <Card>
-          <h2 className="font-semibold mb-3">Upload an invoice yourself</h2>
-          <UploadInvoiceForm jobs={jobs ?? []} />
-        </Card>
+    <div className="space-y-6">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="text-[28px] md:text-[32px] font-bold leading-tight">Invoices</h1>
+          <p className="text-muted text-sm mt-1">
+            ✉{' '}
+            {connected
+              ? <>Receipts inbox connected{lastEmail && <>, last checked {fmtDateTime(lastEmail.processed_at)}</>}. <CheckEmailButton connected /></>
+              : 'Receipts inbox not connected yet.'}
+          </p>
+        </div>
+        <details className="group relative">
+          <summary className={`${secondaryButtonClass} cursor-pointer`}>⇪ Upload invoice</summary>
+          <div className={`${cardClass} absolute right-0 z-10 mt-2 w-[min(92vw,360px)] p-4`}>
+            <UploadInvoiceForm jobs={(jobs ?? []).filter((j) => j.status !== 'complete')} />
+          </div>
+        </details>
       </div>
 
       <section>
-        <SectionTitle>Check these ({pending.length})</SectionTitle>
+        <h2 className="text-lg font-bold mb-3">Needs checking <span className="text-muted font-normal">({pending.length})</span></h2>
         {!pending.length ? (
-          <Empty>Nothing to check. 👍</Empty>
+          <div className="bg-good-tint border border-good/20 rounded-2xl px-4 py-3 text-good font-semibold">Nothing to check ✓</div>
         ) : (
-          <div className="space-y-4">
+          <div className="grid md:grid-cols-2 gap-4">
             {pending.map((x) => {
               const url = x.image_path ? fileUrls.get(x.image_path) : null
-              const reasons = [
-                !x.job_id && (x.job_code_raw ? `job code "${x.job_code_raw}" not found` : 'no job code on it'),
-                x.category === 'subbie' && !x.worker_id && 'subbie not recognised',
-                x.category === 'subbie' && x.hours == null && 'no hours found',
-                x.confidence === 'low' && 'hard to read',
-                x.note,
-              ].filter(Boolean)
               return (
-                <Card key={x.id}>
-                  <div className="flex flex-wrap items-baseline justify-between gap-2 mb-3">
-                    <div>
-                      <span className="font-semibold">{x.supplier ?? 'Unknown supplier'}</span>
-                      <span className="text-gray-400 text-sm">
-                        {' '}· {fmtDate(x.expense_date)}{x.invoice_number && ` · #${x.invoice_number}`} · from {x.source === 'whatsapp' ? 'a worker on WhatsApp' : x.source}
-                      </span>
-                    </div>
-                    {url && <a href={url} target="_blank" className="text-sm text-blue-400 hover:underline">Open {x.file_name ?? 'file'}</a>}
-                  </div>
-                  {reasons.length > 0 && <p className="text-sm text-yellow-400 mb-3">Needs you because: {reasons.join(', ')}.</p>}
-                  <form action={approveExpense.bind(null, x.id)} className="grid grid-cols-2 md:grid-cols-7 gap-3 items-end">
-                    <label className="col-span-2 text-sm">
-                      <span className="text-gray-300">Job</span>
-                      <select name="job_id" required defaultValue={x.job_id ?? ''} className={`${inputClass} mt-1`}>
-                        <option value="" disabled>Choose job…</option>
-                        {(jobs ?? []).map((j) => <option key={j.id} value={j.id}>{j.code} — {j.client_name ?? 'Unnamed'}</option>)}
-                      </select>
-                    </label>
-                    <label className="text-sm">
-                      <span className="text-gray-300">Type</span>
-                      <select name="category" defaultValue={x.category} className={`${inputClass} mt-1`}>
-                        <option value="materials">Materials</option>
-                        <option value="subbie">Subbie</option>
-                        <option value="other">Other</option>
-                      </select>
-                    </label>
-                    <label className="text-sm">
-                      <span className="text-gray-300">Total incl GST ($){x.is_credit && ' — credit'}</span>
-                      <input name="total" defaultValue={x.total} inputMode="decimal" className={`${inputClass} mt-1`} />
-                    </label>
-                    <label className="text-sm">
-                      <span className="text-gray-300">GST ($)</span>
-                      <input name="gst" defaultValue={x.gst ?? ''} inputMode="decimal" placeholder="0" className={`${inputClass} mt-1`} />
-                    </label>
-                    <label className="text-sm">
-                      <span className="text-gray-300">Subbie</span>
-                      <select name="worker_id" defaultValue={x.worker_id ?? ''} className={`${inputClass} mt-1`}>
-                        <option value="">—</option>
-                        {(subbies ?? []).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-                      </select>
-                    </label>
-                    <label className="text-sm">
-                      <span className="text-gray-300">Hours</span>
-                      <input name="hours" defaultValue={x.hours ?? ''} inputMode="decimal" className={`${inputClass} mt-1`} />
-                    </label>
-                    <div className="col-span-2 md:col-span-7 flex gap-2">
-                      <button className={buttonClass}>Save &amp; add to job</button>
-                      <button formAction={rejectExpense.bind(null, x.id)} formNoValidate className={dangerButtonClass}>Not a job cost — ignore</button>
-                    </div>
-                  </form>
-                  {x.category === 'subbie' && !(subbies ?? []).length && (
-                    <p className="text-xs text-gray-500 mt-2">
-                      Add your subbies on the <Link href="/workers" className="text-blue-400 hover:underline">Workers page</Link> so their invoices match automatically.
+                <form key={x.id} action={approveExpense.bind(null, x.id)} className={`${cardClass} border-l-4 !border-l-bad p-4 space-y-3`}>
+                  <div>
+                    <p><strong>{x.supplier ?? 'Unknown supplier'}</strong>, <strong>{money(Number(x.total))}</strong>, {reason(x)}. Which job?</p>
+                    <p className="text-faint text-sm mt-0.5">
+                      Received {fmtDate(x.created_at.slice(0, 10))}{x.source === 'whatsapp' ? ' · photo from a worker' : ''}
+                      {url && <> · <a href={url} target="_blank" className="text-brand font-medium">Open file</a></>}
                     </p>
-                  )}
-                </Card>
+                  </div>
+                  <select name="job_id" required defaultValue={x.job_id ?? ''} className={inputClass}>
+                    <option value="" disabled>Choose a job</option>
+                    {(jobs ?? []).map((j) => <option key={j.id} value={j.id}>{j.address ?? j.client_name ?? j.code}</option>)}
+                  </select>
+                  <details className="group">
+                    <summary className="text-sm text-brand font-medium cursor-pointer">Edit details</summary>
+                    <div className="grid grid-cols-2 gap-2 mt-2">
+                      <label className="block text-sm"><span className="font-medium">Type</span>
+                        <select name="category" defaultValue={x.category} className={`${inputClass} mt-1`}>
+                          <option value="materials">Materials</option>
+                          <option value="subbie">Subbie</option>
+                          <option value="other">Other</option>
+                        </select></label>
+                      <label className="block text-sm"><span className="font-medium">Total incl GST</span>
+                        <input name="total" defaultValue={x.total} inputMode="decimal" className={`${inputClass} mt-1`} /></label>
+                      <label className="block text-sm"><span className="font-medium">GST</span>
+                        <input name="gst" defaultValue={x.gst ?? ''} inputMode="decimal" placeholder="0" className={`${inputClass} mt-1`} /></label>
+                      <label className="block text-sm"><span className="font-medium">Subbie hours</span>
+                        <input name="hours" defaultValue={x.hours ?? ''} inputMode="decimal" className={`${inputClass} mt-1`} /></label>
+                      <label className="block text-sm col-span-2"><span className="font-medium">Subbie</span>
+                        <select name="worker_id" defaultValue={x.worker_id ?? ''} className={`${inputClass} mt-1`}>
+                          <option value="">—</option>
+                          {(subbies ?? []).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+                        </select></label>
+                    </div>
+                    {x.category === 'subbie' && !(subbies ?? []).length && (
+                      <p className="text-xs text-muted mt-2">Add your subbies on the <Link href="/workers" className="text-brand">Workers page</Link> so their invoices match.</p>
+                    )}
+                  </details>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button className={buttonClass}>Add to job</button>
+                    <button formAction={rejectExpense.bind(null, x.id)} formNoValidate className={secondaryButtonClass}>Ignore</button>
+                  </div>
+                </form>
               )
             })}
           </div>
@@ -146,44 +125,38 @@ export default async function InboxPage() {
       </section>
 
       <section>
-        <SectionTitle>Recently handled</SectionTitle>
+        <h2 className="text-lg font-bold mb-3">Recently added</h2>
         {!recent.length ? (
-          <Empty>No invoices yet.</Empty>
+          <div className={`${cardClass} p-8 text-center text-muted`}>No invoices yet.</div>
         ) : (
-          <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-gray-800 text-gray-400">
-                  <th className="text-left px-4 py-3 font-medium">From</th>
-                  <th className="text-left px-4 py-3 font-medium">Job</th>
-                  <th className="text-left px-4 py-3 font-medium">Type</th>
-                  <th className="text-right px-4 py-3 font-medium">Hours</th>
-                  <th className="text-right px-4 py-3 font-medium">Amount ex GST</th>
-                </tr>
-              </thead>
-              <tbody>
-                {recent.map((x) => {
-                  const url = x.image_path ? fileUrls.get(x.image_path) : null
-                  return (
-                    <tr key={x.id} className={`border-b border-gray-800/50 last:border-0 ${x.status === 'rejected' ? 'opacity-40' : ''}`}>
-                      <td className="px-4 py-3">
-                        {url ? <a href={url} target="_blank" className="hover:underline">{x.supplier ?? '—'}</a> : x.supplier ?? '—'}
-                        {x.status === 'rejected' && <span className="text-xs text-gray-500"> (ignored)</span>}
-                      </td>
-                      <td className="px-4 py-3">
-                        {x.job_id && x.jobs ? <Link href={`/jobs/${x.job_id}`} className="text-blue-400 font-mono">{x.jobs.code}</Link> : '—'}
-                      </td>
-                      <td className="px-4 py-3"><span className="text-xs bg-gray-800 px-2 py-0.5 rounded">{x.category}</span></td>
-                      <td className="px-4 py-3 text-right font-mono">{x.hours ? hrs(Number(x.hours)) : ''}</td>
-                      <td className={`px-4 py-3 text-right font-mono ${x.is_credit ? 'text-green-400' : ''}`}>
-                        {money(Number(x.amount_ex_gst))}{x.is_credit && ' credit'}
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
+          <ul className={`${cardClass} divide-y divide-line`}>
+            {recent.map((x) => {
+              const url = x.image_path ? fileUrls.get(x.image_path) : null
+              return (
+                <li key={x.id} className={`flex items-center justify-between gap-3 px-4 py-3 ${x.status === 'rejected' ? 'opacity-50' : ''}`}>
+                  <span className="min-w-0 flex items-center gap-3">
+                    <span className="hidden sm:grid w-9 h-9 shrink-0 place-items-center rounded-xl bg-page text-muted">🧾</span>
+                    <span className="min-w-0">
+                      <span className="flex flex-wrap items-center gap-1.5">
+                        {url ? <a href={url} target="_blank" className="font-semibold hover:text-brand">{x.supplier ?? 'Unknown'}</a> : <span className="font-semibold">{x.supplier ?? 'Unknown'}</span>}
+                        {x.source === 'whatsapp' && <SmallTag>photo</SmallTag>}
+                        {x.is_credit && <SmallTag tone="good">credit</SmallTag>}
+                        {x.category === 'subbie' && <SmallTag>subbie</SmallTag>}
+                        {x.status === 'rejected' && <SmallTag>ignored</SmallTag>}
+                      </span>
+                      <span className="block text-sm text-muted truncate">
+                        {x.job_id && x.jobs ? <Link href={`/jobs/${x.job_id}`} className="hover:text-brand">{x.jobs.address ?? x.jobs.code}</Link> : 'No job'} · {fmtDate(x.expense_date)}
+                      </span>
+                    </span>
+                  </span>
+                  <span className={`text-right shrink-0 font-semibold ${x.is_credit ? 'text-good' : ''}`}>
+                    {money(Number(x.amount_ex_gst))}
+                    <span className="block text-xs font-normal text-faint">ex GST</span>
+                  </span>
+                </li>
+              )
+            })}
+          </ul>
         )}
       </section>
     </div>

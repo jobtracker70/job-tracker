@@ -1,8 +1,9 @@
 'use client'
 
-import { useActionState, useRef } from 'react'
+import { useActionState, useState } from 'react'
 import Link from 'next/link'
 import { uploadQuote } from './actions'
+import { buttonClass, cardClass, inputClass } from '@/components/ui'
 
 export default function NewJobPage() {
   const [error, action, pending] = useActionState(
@@ -15,105 +16,58 @@ export default function NewJobPage() {
         return e instanceof Error ? e.message : 'Something went wrong'
       }
     },
-    null
+    null,
   )
-
-  const fileRef = useRef<HTMLInputElement>(null)
+  const [fileName, setFileName] = useState<string | null>(null)
 
   return (
-    <div className="max-w-xl mx-auto">
-        <div className="mb-8">
-          <Link href="/?tab=waiting" className="text-gray-400 hover:text-white text-sm">← Back</Link>
-          <h1 className="text-2xl font-bold mt-4">Add a Quote</h1>
-          <p className="text-gray-400 text-sm mt-1">Upload a PDF quote. The AI reads it and adds it to &quot;Waiting for decision&quot;, where you accept or reject it.</p>
-        </div>
+    <div className="max-w-xl mx-auto space-y-6">
+      <div>
+        <Link href="/?tab=quotes" className="text-brand text-sm font-medium hover:underline">← Jobs</Link>
+        <h1 className="text-[28px] md:text-[32px] font-bold leading-tight mt-1">New quote</h1>
+      </div>
 
-        <form action={action} className="space-y-5">
-          {/* PDF Upload */}
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-2">
-              Quote PDF <span className="text-red-400">*</span>
+      <form action={action} className="space-y-5">
+        <label className={`${cardClass} block border-2 border-dashed !border-brand/30 hover:!border-brand p-10 text-center cursor-pointer transition`}>
+          <input
+            type="file"
+            name="pdf"
+            accept="application/pdf"
+            required
+            className="sr-only"
+            onChange={(e) => setFileName(e.target.files?.[0]?.name ?? null)}
+          />
+          <span className="text-4xl block mb-3">📄</span>
+          <span className="block font-semibold text-lg">{fileName ?? 'Tap to choose your quote PDF'}</span>
+          <span className="block text-muted text-sm mt-1">{fileName ? 'Tap to choose a different file' : 'The same PDF you sent to the client'}</span>
+        </label>
+
+        <label className="block">
+          <span className="font-medium">Job code <span className="text-faint font-normal">(optional, e.g. SMITH-PENRITH)</span></span>
+          <input type="text" name="job_code" maxLength={24} className={`${inputClass} mt-1.5 uppercase`} />
+          <span className="block text-faint text-sm mt-1">Your team puts this on invoices so costs land on the right job.</span>
+        </label>
+
+        <details className="group">
+          <summary className="text-sm text-brand font-semibold cursor-pointer">More options</summary>
+          <div className="grid gap-3 mt-3">
+            <label className="block">
+              <span className="text-sm font-medium">Client name <span className="text-faint font-normal">(BrushBooks reads it from the PDF)</span></span>
+              <input type="text" name="client_name" placeholder="e.g. Smith" className={`${inputClass} mt-1.5`} />
             </label>
-            <div
-              className="border-2 border-dashed border-gray-700 rounded-xl p-8 text-center cursor-pointer hover:border-blue-500 transition"
-              onClick={() => fileRef.current?.click()}
-            >
-              <div className="text-4xl mb-2">📄</div>
-              <p className="text-gray-400 text-sm">Click to choose a PDF file</p>
-              <input
-                ref={fileRef}
-                type="file"
-                name="pdf"
-                accept="application/pdf"
-                required
-                className="hidden"
-                onChange={(e) => {
-                  const label = e.target.nextElementSibling as HTMLElement | null
-                  if (label && e.target.files?.[0]) {
-                    label.textContent = e.target.files[0].name
-                  }
-                }}
-              />
-              <p className="text-blue-400 text-sm mt-2 font-medium"></p>
-            </div>
-          </div>
-
-          {/* Job code */}
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">
-              Job code <span className="text-gray-500">(you choose it — leave blank and one is made for you)</span>
+            <label className="block">
+              <span className="text-sm font-medium">Job address</span>
+              <input type="text" name="address" placeholder="e.g. 14 Oak St, Penrith" className={`${inputClass} mt-1.5`} />
             </label>
-            <input
-              type="text"
-              name="job_code"
-              placeholder="e.g. SMITH-PENRITH"
-              maxLength={24}
-              className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 text-white placeholder-gray-500 uppercase focus:outline-none focus:border-blue-500"
-            />
-            <p className="text-gray-500 text-xs mt-1">
-              Subbies and suppliers put this code on their invoices, and workers see it in WhatsApp. Letters, numbers and dashes.
-            </p>
           </div>
+        </details>
 
-          {/* Optional overrides */}
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">
-              Client name <span className="text-gray-500">(optional — Claude will detect it)</span>
-            </label>
-            <input
-              type="text"
-              name="client_name"
-              placeholder="e.g. Smith Residence"
-              className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"
-            />
-          </div>
+        {error && <p className="bg-bad-tint text-bad rounded-xl px-4 py-3 text-sm font-medium">{error}</p>}
 
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1">
-              Job address <span className="text-gray-500">(optional)</span>
-            </label>
-            <input
-              type="text"
-              name="address"
-              placeholder="e.g. 14 Oak St, Penrith NSW"
-              className="w-full bg-gray-900 border border-gray-700 rounded-lg px-4 py-2.5 text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"
-            />
-          </div>
-
-          {error && (
-            <div className="bg-red-900/30 border border-red-700 rounded-lg px-4 py-3 text-red-400 text-sm">
-              {error}
-            </div>
-          )}
-
-          <button
-            type="submit"
-            disabled={pending}
-            className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed py-3 rounded-lg font-semibold transition"
-          >
-            {pending ? 'Reading quote…' : 'Add quote'}
-          </button>
-        </form>
+        <button type="submit" disabled={pending} className={`${buttonClass} w-full py-3.5 text-base`}>
+          {pending ? 'Reading your quote…' : 'Add quote'}
+        </button>
+      </form>
     </div>
   )
 }

@@ -1,148 +1,151 @@
 import Link from 'next/link'
 import { createServiceClient } from '@/lib/supabase'
-import { HEALTH_COLOR, HEALTH_LABEL, forecast, jobNumbers, type JobSummary } from '@/lib/forecast'
-import { fmtDate, hrs, money, sydneyMidnightISO, todaySydney } from '@/lib/format'
-import { BudgetBar, Empty, Stat } from '@/components/ui'
+import { forecast, jobNumbers, type JobSummary } from '@/lib/forecast'
+import { invoicesToCheckCount, shiftsToCheck } from '@/lib/checks'
+import { FINISHED, jobPill, jobSubtitle, jobTitle } from '@/lib/status'
+import { fmtClock, hrs, money } from '@/lib/format'
+import { Pill, ProgressBar, buttonClass, cardClass } from '@/components/ui'
 
 export const dynamic = 'force-dynamic'
 
 const TABS = [
-  { key: 'active', label: 'Active jobs', statuses: ['active'] },
-  { key: 'waiting', label: 'Waiting for decision', statuses: ['quoted'] },
-  { key: 'finished', label: 'Finished jobs', statuses: ['complete', 'invoiced', 'paid'] },
-  { key: 'missed', label: 'Missed projects', statuses: ['rejected'] },
+  { key: 'active', label: 'Active', match: (s: string) => s === 'active' },
+  { key: 'quotes', label: 'Quotes', match: (s: string) => s === 'quoted' },
+  { key: 'finished', label: 'Finished', match: (s: string) => FINISHED.includes(s) || s === 'rejected' },
 ] as const
-
-function mondayThisWeek() {
-  const today = todaySydney()
-  const d = new Date(`${today}T00:00:00Z`)
-  d.setUTCDate(d.getUTCDate() - ((d.getUTCDay() + 6) % 7))
-  return d.toISOString().slice(0, 10)
-}
 
 export default async function Home({ searchParams }: { searchParams: Promise<{ tab?: string }> }) {
   const { tab: tabParam } = await searchParams
-  const tab = TABS.find((t) => t.key === tabParam) ?? TABS[0]
+  const tab = TABS.find((t) => t.key === (tabParam === 'waiting' ? 'quotes' : tabParam)) ?? TABS[0]
   const supabase = createServiceClient()
+  const tenHoursAgo = new Date(new Date().getTime() - 10 * 3600000).toISOString()
 
-  const [{ data: jobsData }, { data: weekEntries }, { count: toCheck }, { count: hoursToCheck }] = await Promise.all([
+  const [{ data: jobsData }, shifts, invoiceCount, { data: longShifts }] = await Promise.all([
     supabase.from('job_summary').select('*').order('created_at', { ascending: false }),
-    supabase.from('time_entry_costs').select('paid_hours').gte('start_time', sydneyMidnightISO(mondayThisWeek())),
-    supabase.from('expenses').select('*', { count: 'exact', head: true }).eq('status', 'pending'),
-    supabase.from('time_entries').select('*', { count: 'exact', head: true }).eq('needs_review', true),
+    shiftsToCheck(supabase),
+    invoicesToCheckCount(supabase),
+    supabase
+      .from('time_entries')
+      .select('id, start_time, workers(name), jobs(address, code)')
+      .is('end_time', null)
+      .lt('start_time', tenHoursAgo),
   ])
 
-  const jobs = (jobsData ?? []) as JobSummary[]
-  const counts = Object.fromEntries(TABS.map((t) => [t.key, jobs.filter((j) => (t.statuses as readonly string[]).includes(j.status)).length]))
-  const shown = jobs.filter((j) => (tab.statuses as readonly string[]).includes(j.status))
+  const jobs = ((jobsData ?? []) as JobSummary[]).map((j) => {
+    const nums = jobNumbers(j)
+    return { j, nums, f: forecast(j, nums) }
+  })
 
-  const weekHours = (weekEntries ?? []).reduce((sum, e) => sum + Number(e.paid_hours), 0)
+  // Everything that needs the owner, in one place
+  const attention: { text: string; href: string }[] = []
+  if (invoiceCount) attention.push({ text: `${invoiceCount} invoice${invoiceCount > 1 ? 's' : ''} to check`, href: '/inbox' })
+  if (shifts.length) attention.push({ text: `${shifts.length} shift${shifts.length > 1 ? 's' : ''} to check`, href: '/hours' })
+  for (const { j } of jobs.filter((x) => x.j.status === 'active' && x.f.health === 'over')) {
+    attention.push({ text: `${jobTitle(j)} is over budget`, href: `/jobs/${j.id}` })
+  }
+  for (const s of (longShifts ?? []) as unknown as { start_time: string; workers: { name: string } | null; jobs: { address: string | null; code: string } | null }[]) {
+    attention.push({
+      text: `${s.workers?.name.split(' ')[0] ?? 'Someone'} is still signed in at ${s.jobs?.address ?? s.jobs?.code ?? 'a job'} since ${fmtClock(s.start_time)}`,
+      href: '/hours',
+    })
+  }
 
-  const activeHealth = jobs
-    .filter((j) => j.status === 'active')
-    .map((j) => forecast(j, jobNumbers(j)).health)
-  const needsAttention = activeHealth.filter((h) => h === 'behind' || h === 'over').length
+  const counts = Object.fromEntries(TABS.map((t) => [t.key, jobs.filter((x) => t.match(x.j.status)).length]))
+  const shown = jobs.filter((x) => tab.match(x.j.status))
 
   return (
-    <div>
-      <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
-        <Stat label="Active jobs" value={String(counts.active)} />
-        <Stat label="Hours logged this week" value={weekHours > 0 ? hrs(weekHours) : '—'} />
-        <Stat
-          label="Jobs needing attention"
-          value={String(needsAttention)}
-          tone={needsAttention ? 'red' : undefined}
-          sub={needsAttention ? 'over or using hours too fast' : 'all on track'}
-        />
-        <Link href="/hours">
-          <Stat label="Hours to check" value={String(hoursToCheck ?? 0)} tone={hoursToCheck ? 'red' : undefined} sub="forgotten sign-outs" />
-        </Link>
-        <Link href="/inbox">
-          <Stat label="Invoices to check" value={String(toCheck ?? 0)} tone={toCheck ? 'yellow' : undefined} sub="tap to review" />
-        </Link>
-      </div>
+    <div className="space-y-6">
+      {attention.length ? (
+        <details className="group bg-warn-tint border border-warn/20 rounded-2xl">
+          <summary className="flex items-center justify-between gap-3 px-4 py-3 cursor-pointer text-warn font-semibold">
+            <span>ⓘ {attention.length} thing{attention.length > 1 ? 's' : ''} need{attention.length > 1 ? '' : 's'} your attention</span>
+            <span className="transition group-open:rotate-180">⌄</span>
+          </summary>
+          <ul className="px-4 pb-3 space-y-1">
+            {attention.map((a, i) => (
+              <li key={i}>
+                <Link href={a.href} className="flex justify-between gap-3 py-1.5 text-ink hover:text-brand">
+                  <span>{a.text}</span>
+                  <span className="text-brand">→</span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </details>
+      ) : (
+        <div className="bg-good-tint border border-good/20 rounded-2xl px-4 py-3 text-good font-semibold">All good ✓</div>
+      )}
 
-      <div className="flex gap-1 mb-5 overflow-x-auto whitespace-nowrap border-b border-gray-800">
+      <h1 className="text-[28px] md:text-[32px] font-bold leading-tight">Jobs</h1>
+
+      <div className={`${cardClass} inline-flex p-1 gap-1`}>
         {TABS.map((t) => (
           <Link
             key={t.key}
             href={t.key === 'active' ? '/' : `/?tab=${t.key}`}
-            className={`px-4 py-2.5 text-sm font-medium border-b-2 -mb-px ${
-              t.key === tab.key ? 'border-blue-500 text-white' : 'border-transparent text-gray-400 hover:text-white'
+            className={`px-4 py-2 rounded-xl text-sm font-semibold transition ${
+              t.key === tab.key ? 'bg-brand-tint text-brand' : 'text-muted hover:text-ink'
             }`}
           >
-            {t.label} <span className="text-gray-500">({counts[t.key]})</span>
+            {t.label} <span className="font-normal">({counts[t.key]})</span>
           </Link>
         ))}
       </div>
 
       {shown.length === 0 ? (
-        <Empty>
-          {tab.key === 'waiting' || tab.key === 'active' ? (
+        <div className={`${cardClass} p-10 text-center`}>
+          <p className="text-4xl mb-3">🖌️</p>
+          <p className="font-semibold">{tab.key === 'finished' ? 'No finished jobs yet.' : tab.key === 'quotes' ? 'No quotes waiting.' : 'No active jobs yet.'}</p>
+          {tab.key !== 'finished' && (
             <>
-              No jobs here yet.{' '}
-              <Link href="/jobs/new" className="text-blue-400 hover:underline">Upload a quote</Link> to get started.
+              <p className="text-muted text-sm mt-1">Add your first quote to get started.</p>
+              <Link href="/jobs/new" className={`${buttonClass} mt-5`}>+ New quote</Link>
             </>
-          ) : (
-            'Nothing here yet.'
           )}
-        </Empty>
+        </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {shown.map((j) => <JobTile key={j.id} job={j} />)}
+          {shown.map(({ j, nums, f }) => {
+            const pill = jobPill(j, f)
+            return (
+              <Link key={j.id} href={`/jobs/${j.id}`} className={`${cardClass} block p-5 hover:border-brand/40 transition`}>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="text-lg font-bold truncate">{jobTitle(j)}</p>
+                    <p className="text-muted text-sm truncate">{jobSubtitle(j)}</p>
+                  </div>
+                  <Pill tone={pill.tone}>{pill.label}</Pill>
+                </div>
+
+                {j.status === 'active' && (
+                  <div className="mt-5 space-y-4">
+                    <ProgressBar label="Hours" used={nums.hoursUsed} budget={nums.hoursBudget} format={hrs} />
+                    <ProgressBar label="Materials" used={nums.materialsCost} budget={nums.materialsBudget} format={money} />
+                  </div>
+                )}
+
+                {j.status === 'quoted' && (
+                  <div className="mt-5 flex items-center justify-between">
+                    <span className="text-xl font-bold">{money(nums.income)}</span>
+                    <span className="text-brand font-semibold text-sm">Accept or reject →</span>
+                  </div>
+                )}
+
+                {FINISHED.includes(j.status) && (
+                  <div className="mt-5 flex items-center justify-between">
+                    <span><span className="text-muted text-sm">Profit </span><span className="text-xl font-bold">{money(nums.profit)}</span></span>
+                    {nums.margin != null && (
+                      <Pill tone={nums.margin >= 0.3 ? 'good' : nums.margin >= 0.15 ? 'warn' : 'bad'}>{Math.round(nums.margin * 100)}%</Pill>
+                    )}
+                  </div>
+                )}
+
+                {j.status === 'rejected' && <p className="mt-4 text-sm text-muted line-clamp-2">Why: {j.rejection_reason ?? '—'}</p>}
+              </Link>
+            )
+          })}
         </div>
       )}
     </div>
-  )
-}
-
-function JobTile({ job: j }: { job: JobSummary }) {
-  const nums = jobNumbers(j)
-  const f = j.status === 'active' ? forecast(j, nums) : null
-
-  return (
-    <Link href={`/jobs/${j.id}`} className="block bg-gray-900 border border-gray-800 rounded-xl p-4 hover:border-gray-600 transition">
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-blue-400 font-mono text-sm font-bold">{j.code}</span>
-        {f && <span className={`text-xs px-2 py-0.5 rounded-full ${HEALTH_COLOR[f.health]}`}>{HEALTH_LABEL[f.health]}</span>}
-      </div>
-      <p className="font-semibold mt-1 truncate">{j.client_name ?? 'Unnamed job'}</p>
-      <p className="text-gray-400 text-sm truncate">{j.address ?? '—'}</p>
-
-      {j.status === 'active' && (
-        <div className="mt-4 space-y-3">
-          <BudgetBar label="Labour hours" used={nums.hoursUsed} budget={nums.hoursBudget} format={hrs} />
-          <BudgetBar label="Materials" used={nums.materialsCost} budget={nums.materialsBudget} format={money} />
-          <p className="text-xs text-gray-500">
-            {fmtDate(j.start_date)} → {fmtDate(j.planned_finish)}
-          </p>
-        </div>
-      )}
-
-      {j.status === 'quoted' && (
-        <div className="mt-4 flex items-center justify-between text-sm">
-          <span className="text-gray-300">Quote {money(nums.income)}</span>
-          <span className="text-purple-300">Accept or reject →</span>
-        </div>
-      )}
-
-      {['complete', 'invoiced', 'paid'].includes(j.status) && (
-        <div className="mt-4 flex items-center justify-between text-sm">
-          <span className="text-gray-300">Profit {money(nums.profit)}</span>
-          {nums.margin != null && (
-            <span className={nums.margin >= 0.3 ? 'text-green-400' : nums.margin >= 0.15 ? 'text-yellow-400' : 'text-red-400'}>
-              {Math.round(nums.margin * 100)}% margin
-            </span>
-          )}
-        </div>
-      )}
-
-      {j.status === 'rejected' && (
-        <p className="mt-4 text-sm text-gray-400 line-clamp-2">
-          <span className="text-red-400">Why: </span>
-          {j.rejection_reason ?? '—'}
-        </p>
-      )}
-    </Link>
   )
 }

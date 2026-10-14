@@ -6,6 +6,13 @@ export function money(n: number | null | undefined) {
   return `${sign}$${Math.round(Math.abs(n)).toLocaleString('en-AU')}`
 }
 
+// Invoices and receipts show cents
+export function moneyCents(n: number | null | undefined) {
+  if (n == null || Number.isNaN(n)) return '—'
+  const sign = n < 0 ? '-' : ''
+  return `${sign}$${Math.abs(n).toLocaleString('en-AU', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+}
+
 export function hrs(n: number | null | undefined) {
   if (n == null || Number.isNaN(n)) return '—'
   return `${(Math.round(n * 10) / 10).toLocaleString('en-AU')}h`
