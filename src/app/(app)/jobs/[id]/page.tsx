@@ -7,6 +7,7 @@ import {
   AlertBar, Collapsible, Pill, ProgressBar, SmallTag,
   buttonClass, cardClass, dangerButtonClass, inputClass, secondaryButtonClass,
 } from '@/components/ui'
+import { ConfirmButton } from '@/components/confirm-button'
 import { acceptQuote, addVariation, deleteVariation, rejectQuote, setJobStatus, updateJob } from './actions'
 
 export const dynamic = 'force-dynamic'
@@ -254,7 +255,9 @@ export default async function JobPage({ params, searchParams }: { params: Promis
                         <span className="font-semibold">{v.description}</span>
                         <span className="block text-muted">+{money(Number(v.amount))} · +{hrs(Number(v.hours))} · +{money(Number(v.materials))} materials</span>
                       </span>
-                      <form action={deleteVariation.bind(null, id, v.id)}><button className="text-faint hover:text-bad text-sm">Remove</button></form>
+                      <form action={deleteVariation.bind(null, id, v.id)}>
+                        <ConfirmButton label="Remove" question={`Remove "${v.description}"?`} confirmLabel="Yes, remove" className="text-faint hover:text-bad text-sm" />
+                      </form>
                     </li>
                   ))}
                 </ul>

@@ -4,8 +4,9 @@ import { shiftsToCheck } from '@/lib/checks'
 import { fmtClock, fmtDate, fmtDuration, hrs, money, sydneyMidnightISO, timeToMinutes, toSydneyLocalInput, todaySydney } from '@/lib/format'
 import { DEFAULT_END, DEFAULT_START } from '@/lib/hours'
 import { waNumber } from '@/lib/whatsapp'
-import { AlertBar, SmallTag, buttonClass, cardClass, dangerButtonClass, inputClass, secondaryButtonClass } from '@/components/ui'
+import { AlertBar, SmallTag, buttonClass, cardClass, inputClass, secondaryButtonClass } from '@/components/ui'
 import { ShiftTimes } from '@/components/shift-times'
+import { ConfirmButton } from '@/components/confirm-button'
 import { addEntry, deleteEntry, markReviewed, updateEntry } from './actions'
 
 export const dynamic = 'force-dynamic'
@@ -228,7 +229,9 @@ function ShiftRow({ e, jobs, job, back, today }: { e: Entry; jobs: Job[]; job: J
           <ShiftTimes defaultStart={toSydneyLocalInput(e.start_time)} defaultEnd={toSydneyLocalInput(e.end_time)} today={today} allowOpen={!e.end_time} {...usual(job)} />
           <button className={`${buttonClass} w-full`}>Save shift</button>
         </form>
-        <form action={deleteEntry.bind(null, e.id, back)}><button className={dangerButtonClass}>Delete this shift</button></form>
+        <form action={deleteEntry.bind(null, e.id, back)} className="max-w-md">
+          <ConfirmButton label="Delete this shift" question={`Delete ${e.worker_name}'s shift on ${fmtDate(e.work_day)} (${hrs(Number(e.paid_hours))})? This can't be undone.`} confirmLabel="Yes, delete shift" />
+        </form>
       </div>
     </details>
   )
