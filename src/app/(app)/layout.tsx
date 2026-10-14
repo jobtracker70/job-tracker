@@ -38,7 +38,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           <Link href="/jobs/new" className={buttonClass}>+ New quote</Link>
         </div>
 
-        <main className="max-w-4xl mx-auto px-4 md:px-10 pt-5 md:pt-4 pb-28 md:pb-16">
+        <main className="max-w-6xl mx-auto px-4 md:px-10 pt-5 md:pt-4 pb-28 md:pb-16">
           {children}
           <div className="md:hidden print:hidden mt-10 flex justify-center gap-6 text-sm text-faint">
             <Link href="/privacy">Privacy</Link>
