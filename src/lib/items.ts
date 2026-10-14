@@ -10,8 +10,10 @@ export function totalItems(invoices: { line_items: unknown; is_credit: boolean }
   for (const inv of invoices) {
     const sign = inv.is_credit ? -1 : 1
     for (const i of itemsOf(inv.line_items)) {
-      const key = i.description.toLowerCase().replace(/\s+/g, ' ').trim()
-      const r = map.get(key) ?? { description: i.description, qty: 0, amount: 0, times: 0 }
+      // A return of something bought earlier comes off the same line
+      const name = inv.is_credit ? i.description.replace(/^(return|refund|credit)\s*[:\-–]?\s*/i, '') : i.description
+      const key = name.toLowerCase().replace(/\s+/g, ' ').trim()
+      const r = map.get(key) ?? { description: name, qty: 0, amount: 0, times: 0 }
       r.qty += sign * Math.abs(Number(i.qty ?? 1))
       r.amount += sign * Math.abs(Number(i.amount ?? (i.unit_price != null ? i.unit_price * Number(i.qty ?? 1) : 0)))
       r.times++
