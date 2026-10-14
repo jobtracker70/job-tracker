@@ -5,6 +5,7 @@ import { fmtDate, fmtDateTime, moneyCents as money } from '@/lib/format'
 import { SmallTag, buttonClass, cardClass, inputClass, secondaryButtonClass } from '@/components/ui'
 import { approveExpense, rejectExpense } from './actions'
 import { CheckEmailButton, UploadInvoiceForm } from './forms'
+import { ConfirmButton } from '@/components/confirm-button'
 
 export const dynamic = 'force-dynamic'
 export const maxDuration = 60
@@ -127,7 +128,14 @@ export default async function InboxPage() {
                   </details>
                   <div className="grid grid-cols-2 gap-2">
                     <button className={buttonClass}>Add to job</button>
-                    <button formAction={rejectExpense.bind(null, x.id)} formNoValidate className={secondaryButtonClass}>Ignore</button>
+                    <ConfirmButton
+                      label="Ignore"
+                      question={`Ignore this ${money(Number(x.total))} invoice from ${x.supplier ?? 'this supplier'}? It won't count on any job.`}
+                      confirmLabel="Yes, ignore it"
+                      className={secondaryButtonClass}
+                      formAction={rejectExpense.bind(null, x.id)}
+                      formNoValidate
+                    />
                   </div>
                 </form>
               )

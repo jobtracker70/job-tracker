@@ -91,7 +91,13 @@ export default async function JobPage({ params, searchParams }: { params: Promis
               <Field label="Finish date (optional)" name="planned_finish" type="date" defaultValue={null} />
               <Field label="Painters on the job" name="crew_size" type="number" defaultValue={2} />
               <p className="text-faint text-xs">No finish date? It&apos;s worked out from the quoted hours ({hrs(j.quoted_hours)}).</p>
-              <button className={`${buttonClass} w-full`}>Start job</button>
+              <ConfirmButton
+                label="Start job"
+                question="Start this job? It moves to Active and workers can sign in to it on WhatsApp straight away."
+                confirmLabel="Yes, start job"
+                className={`${buttonClass} w-full`}
+                tone="brand"
+              />
             </form>
             <form action={rejectQuote.bind(null, id)} className={`${cardClass} p-5 space-y-3`}>
               <h2 className="text-lg font-bold">Reject quote</h2>

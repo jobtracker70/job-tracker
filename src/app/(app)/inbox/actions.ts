@@ -66,6 +66,26 @@ export async function approveExpense(expenseId: string, formData: FormData) {
   refresh()
 }
 
+// Move an invoice to another job (or off all jobs, back to "Needs checking")
+export async function moveExpense(expenseId: string, formData: FormData) {
+  await requireAuth()
+  const jobId = text(formData.get('job_id'))
+  await createServiceClient()
+    .from('expenses')
+    .update({ job_id: jobId, status: jobId ? 'approved' : 'pending' })
+    .eq('id', expenseId)
+  refresh()
+  revalidatePath(`/inbox/${expenseId}`)
+}
+
+// Undo "Ignore": back to "Needs checking"
+export async function restoreExpense(expenseId: string) {
+  await requireAuth()
+  await createServiceClient().from('expenses').update({ status: 'pending' }).eq('id', expenseId).eq('status', 'rejected')
+  refresh()
+  revalidatePath(`/inbox/${expenseId}`)
+}
+
 export async function rejectExpense(expenseId: string) {
   await requireAuth()
   await createServiceClient().from('expenses').update({ status: 'rejected' }).eq('id', expenseId)

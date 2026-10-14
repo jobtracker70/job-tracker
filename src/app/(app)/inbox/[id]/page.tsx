@@ -2,7 +2,8 @@ import Link from 'next/link'
 import { notFound } from 'next/navigation'
 import { createServiceClient } from '@/lib/supabase'
 import { fmtDate, fmtDateTime, hrs, moneyCents } from '@/lib/format'
-import { Pill, SmallTag, cardClass, secondaryButtonClass } from '@/components/ui'
+import { Pill, SmallTag, buttonClass, cardClass, inputClass, secondaryButtonClass } from '@/components/ui'
+import { moveExpense, restoreExpense } from '../actions'
 import { InvoiceItems } from '@/components/invoice-items'
 
 export const dynamic = 'force-dynamic'
@@ -21,6 +22,9 @@ export default async function InvoicePage({ params }: { params: Promise<{ id: st
 
   const job = x.jobs as { id: string; code: string; address: string | null } | null
   const sender = (x.workers as { name: string } | null)?.name
+  const { data: activeJobs } = await supabase.from('jobs').select('id, code, address').eq('status', 'active').order('created_at', { ascending: false })
+  const jobOptions = [...(activeJobs ?? [])]
+  if (job && !jobOptions.some((j) => j.id === job.id)) jobOptions.unshift(job)
   const fileUrl = x.image_path ? (await supabase.storage.from('invoices').createSignedUrl(x.image_path, 3600)).data?.signedUrl : null
   const status = x.status === 'pending' ? { tone: 'warn' as const, label: 'Needs checking' } : x.status === 'rejected' ? { tone: 'neutral' as const, label: 'Ignored' } : { tone: 'good' as const, label: 'Added to job' }
 
@@ -69,6 +73,24 @@ export default async function InvoicePage({ params }: { params: Promise<{ id: st
         {fileUrl && <a href={fileUrl} target="_blank" className={secondaryButtonClass}>Open the original invoice</a>}
         {x.status === 'pending' && <Link href="/inbox" className={secondaryButtonClass}>Check it on the Invoices page</Link>}
       </div>
+
+      {x.status === 'approved' && (
+        <details className={`${cardClass} group`}>
+          <summary className="px-5 py-4 cursor-pointer font-semibold text-brand">Wrong job? Move this invoice</summary>
+          <form action={moveExpense.bind(null, x.id)} className="px-5 pb-5 space-y-3 max-w-md">
+            <select name="job_id" defaultValue={x.job_id ?? ''} className={inputClass}>
+              {jobOptions.map((j) => <option key={j.id} value={j.id}>{j.address ?? j.code}</option>)}
+              <option value="">Not on any job (back to Needs checking)</option>
+            </select>
+            <button className={buttonClass}>Save</button>
+          </form>
+        </details>
+      )}
+      {x.status === 'rejected' && (
+        <form action={restoreExpense.bind(null, x.id)}>
+          <button className={secondaryButtonClass}>Undo ignore (back to Needs checking)</button>
+        </form>
+      )}
     </div>
   )
 }
