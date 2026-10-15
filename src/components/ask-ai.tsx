@@ -31,7 +31,10 @@ export function AskAI() {
   const router = useRouter()
   const endRef = useRef<HTMLDivElement>(null)
 
-  useEffect(() => endRef.current?.scrollIntoView({ behavior: 'smooth' }), [msgs, thinking, open])
+  // Braces matter: newer browsers return a promise from scrollIntoView, which React must not get back
+  useEffect(() => {
+    endRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [msgs, thinking, open])
 
   function send(text: string) {
     const q = text.trim()
