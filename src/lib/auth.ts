@@ -36,6 +36,22 @@ export function isValidSession(value: string | undefined) {
   return Number(exp) > Date.now() / 1000
 }
 
+// Signed, tamper-proof data handed to the browser (e.g. a change the AI assistant proposed, waiting for Confirm)
+export function sealPayload(data: object) {
+  const body = Buffer.from(JSON.stringify(data)).toString('base64url')
+  return `${body}.${sign(`payload:${body}`)}`
+}
+
+export function openPayload<T>(token: string): T | null {
+  const [body, sig] = token.split('.')
+  if (!body || !sig || !safeEqual(sig, sign(`payload:${body}`))) return null
+  try {
+    return JSON.parse(Buffer.from(body, 'base64url').toString('utf8')) as T
+  } catch {
+    return null
+  }
+}
+
 // Stored as "scrypt:<salt>:<hash>" in app_settings.password_hash; APP_PASSWORD overrides it if set.
 export function hashPassword(password: string, salt: string) {
   return `scrypt:${salt}:${scryptSync(password, salt, 32).toString('base64url')}`

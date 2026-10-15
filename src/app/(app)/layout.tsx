@@ -4,6 +4,10 @@ import { invoicesToCheckCount, shiftsToCheck } from '@/lib/checks'
 import { BottomNav, SideNav } from '@/components/nav'
 import { Logo, buttonClass } from '@/components/ui'
 import { logout } from '../login/actions'
+import { AskAI } from '@/components/ask-ai'
+
+// The AI assistant can take a few seconds to look things up
+export const maxDuration = 60
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   const supabase = createServiceClient()
@@ -48,6 +52,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       </div>
 
       <BottomNav counts={counts} />
+      <AskAI />
     </div>
   )
 }
