@@ -6,7 +6,9 @@ import { jobPill } from './status'
 import { fmtClock, fmtDate, fmtDuration, sydneyDateOf, sydneyLocalToISO, todaySydney } from './format'
 import { itemsOf } from './items'
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+// Created on first use, so a missing key can't break pages that never ask the AI anything
+let client: Anthropic | null = null
+const ai = () => (client ??= new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY }))
 const MODEL = 'claude-sonnet-5-5'
 const MAX_TURNS = 8
 const MAX_SHIFT_HOURS = 16
@@ -392,7 +394,7 @@ export async function askAssistant(history: ChatMessage[]) {
   if (!messages.length) return { text: 'Ask me anything about your jobs, hours or invoices.', proposals }
 
   for (let turn = 0; turn < MAX_TURNS; turn++) {
-    const res = await anthropic.messages.create({ model: MODEL, max_tokens: 2048, system: systemPrompt(), tools: TOOLS, messages })
+    const res = await ai().messages.create({ model: MODEL, max_tokens: 2048, system: systemPrompt(), tools: TOOLS, messages })
     messages.push({ role: 'assistant', content: res.content })
     const calls = res.content.filter((c): c is Anthropic.Messages.ToolUseBlock => c.type === 'tool_use')
     if (res.stop_reason !== 'tool_use' || !calls.length) {

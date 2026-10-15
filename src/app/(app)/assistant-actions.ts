@@ -10,7 +10,13 @@ export async function askAction(history: ChatMessage[]) {
     return await askAssistant(history)
   } catch (e) {
     console.error('assistant failed', e)
-    return { text: "Sorry, I couldn't answer that just now. Please try again in a minute.", proposals: [] }
+    const noCredit = e instanceof Error && /credit balance/i.test(e.message)
+    return {
+      text: noCredit
+        ? 'The AI account has run out of credit, so I can\'t answer right now. Top it up at console.anthropic.com → Billing.'
+        : "Sorry, I couldn't answer that just now. Please try again in a minute.",
+      proposals: [],
+    }
   }
 }
 

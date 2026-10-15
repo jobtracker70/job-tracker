@@ -40,8 +40,12 @@ export function AskAI() {
     setMsgs(next)
     setInput('')
     startThinking(async () => {
-      const res = await askAction(next.map((m) => ({ role: m.role, text: m.text })))
-      setMsgs((cur) => [...cur, { role: 'assistant', text: res.text, proposals: res.proposals }])
+      try {
+        const res = await askAction(next.map((m) => ({ role: m.role, text: m.text })))
+        setMsgs((cur) => [...cur, { role: 'assistant', text: res.text, proposals: res.proposals }])
+      } catch {
+        setMsgs((cur) => [...cur, { role: 'assistant', text: "Sorry, I couldn't reach the AI just now. Check your internet and try again." }])
+      }
     })
   }
 
@@ -50,7 +54,7 @@ export function AskAI() {
       setMsgs((cur) => cur.map((m, i) => (i !== msgIndex ? m : { ...m, proposals: m.proposals?.map((p) => (p.token === token ? { ...p, ...patch } : p)) })))
     if (!confirm) return update({ state: 'cancelled', result: 'Cancelled. Nothing was changed.' })
     setBusyToken(token)
-    const res = await confirmAction(token)
+    const res = await confirmAction(token).catch(() => ({ ok: false, message: "Couldn't save just now, so nothing was changed. Try again." }))
     setBusyToken(null)
     update({ state: res.ok ? 'done' : 'failed', result: res.message })
     if (res.ok) router.refresh()
