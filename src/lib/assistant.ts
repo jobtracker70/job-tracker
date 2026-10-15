@@ -5,11 +5,12 @@ import { forecast, jobNumbers, type JobSummary } from './forecast'
 import { jobPill } from './status'
 import { fmtClock, fmtDate, fmtDuration, sydneyDateOf, sydneyLocalToISO, todaySydney } from './format'
 import { itemsOf } from './items'
+import { AI_MODELS } from './ai'
 
 // Created on first use, so a missing key can't break pages that never ask the AI anything
 let client: Anthropic | null = null
 const ai = () => (client ??= new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY }))
-const MODEL = 'claude-sonnet-5-5'
+const MODEL = AI_MODELS.assistant
 const MAX_TURNS = 8
 const MAX_SHIFT_HOURS = 16
 

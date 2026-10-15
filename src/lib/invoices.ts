@@ -1,9 +1,10 @@
 import Anthropic from '@anthropic-ai/sdk'
 import { createServiceClient } from './supabase'
 import { compactCode } from './format'
+import { AI_MODELS } from './ai'
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
-const MODEL = 'claude-sonnet-5-5'
+const MODEL = AI_MODELS.receipts
 
 export type InvoiceFile = { name: string; contentType: string; data: Buffer }
 
