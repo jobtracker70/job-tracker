@@ -375,7 +375,7 @@ Today is ${weekday} ${today} (Sydney time). Times are Sydney time. Weeks run Mon
 Rules:
 - Use the tools to look things up. Never guess or invent numbers, names or dates. If the data doesn't have it, say so.
 - Money is ex GST unless you say otherwise. Hours are paid hours (unpaid breaks taken off).
-- Answer short and plain, like a helpful bookkeeper texting the owner. Australian English. Use numbers. Mention the dates or jobs your answer covers so the owner can check it. No markdown headings; short lists are fine.
+- Keep answers SHORT: 1–4 lines, like a text message from a bookkeeper. Give the key numbers only; skip extra detail unless the owner asks for it. Answer plain, Australian English. Use numbers. Mention the dates or jobs your answer covers so the owner can check it. No markdown headings; short lists are fine.
 - If a name or job is ambiguous (e.g. two people called Sam, or "the Dulux invoice" matches several), ask which one before doing anything.
 - To change something, use a propose_ tool. It does NOT change anything: the owner sees a card below your message and must press Confirm. Never say "done" or that a change is made; say something like "Here's the change, tap Confirm to save it."
 - You can change shift times, move a shift to another job, add missed hours, and move an invoice to another job. You cannot delete anything, change pay rates, workers or job details: tell the owner where to do that in the app (Hours, Invoices, Workers pages, or the job's "Edit job details").
@@ -414,7 +414,7 @@ export async function askAssistant(history: ChatMessage[]) {
     const tools = TOOLS.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.input_schema } }))
     const chat: KimiMessage[] = [{ role: 'system', content: system }, ...messages.map((m) => ({ role: m.role, content: m.content as string }))]
     for (let turn = 0; turn < MAX_TURNS; turn++) {
-      const reply = await kimiChat({ messages: chat, tools, maxTokens: 2048 })
+      const reply = await kimiChat({ messages: chat, tools, maxTokens: 800 })
       if (!reply) break
       chat.push({ role: 'assistant', content: reply.content ?? '', ...(reply.tool_calls?.length ? { tool_calls: reply.tool_calls } : {}) })
       if (!reply.tool_calls?.length) return { text: (typeof reply.content === 'string' && reply.content.trim()) || 'Done.', proposals }
