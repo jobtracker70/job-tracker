@@ -74,12 +74,8 @@ export async function closeEntry(
   return { hours, flagged: false, end: now }
 }
 
-// The bot then treats the worker's next time-like reply as the real finish time for this shift.
-export async function askForFinishTime(supabase: Supabase, workerId: string, entryId: string) {
-  await supabase
-    .from('bot_state')
-    .upsert({ worker_id: workerId, kind: 'finish_time', entry_id: entryId, job_id: null, created_at: new Date().toISOString() })
-}
+// Workers can't change their own hours on WhatsApp; the owner fixes them on the Hours page.
+export const CALL_BOSS = `To change your hours, please call your boss. They can fix them in BrushBooks.`
 
 type OpenRow = {
   id: string; start_time: string; worker_id: string
@@ -108,7 +104,6 @@ export async function sendDueReminders(supabase: Supabase) {
       [
         { id: 'signout', title: 'Sign out now' },
         { id: 'still_working', title: 'Still working' },
-        { id: 'finished_earlier', title: 'Fix finish time' },
       ],
     )
     if (ok) sent++
@@ -127,11 +122,10 @@ export async function autoCloseStale(supabase: Supabase) {
   for (const e of (data ?? []) as unknown as OpenRow[]) {
     const closed = await closeEntry(supabase, e, new Date(), e.jobs?.day_end)
     if (!e.workers?.active) continue
-    await askForFinishTime(supabase, e.worker_id, e.id)
     await sendText(
       waNumber(e.workers.phone),
       `You didn't sign out at ${site(e)}, so I've put your finish time as ${fmtClock(closed.end)}. ` +
-        `If you finished at a different time, reply with the time, e.g. 4:30pm.`,
+        `If you finished at a different time, call your boss to fix it.`,
     )
   }
   return data?.length ?? 0

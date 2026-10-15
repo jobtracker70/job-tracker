@@ -1,7 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import { createServiceClient } from '@/lib/supabase'
-import { compactCode, fmtClock, fmtDuration, money, parseClockTime, parseTimeRange, sydneyDateOf, sydneyTimeOn, todaySydney } from '@/lib/format'
-import { askForFinishTime, closeEntry, finishTimeFor, startTimeFor, usualFinish } from '@/lib/hours'
+import { compactCode, fmtClock, fmtDuration, money, sydneyTimeOn, todaySydney } from '@/lib/format'
+import { CALL_BOSS, closeEntry, finishTimeFor, startTimeFor, usualFinish } from '@/lib/hours'
 import { isReadableInvoiceType, processInvoiceFile } from '@/lib/invoices'
 import { downloadMedia, sendButtons, sendList, sendText } from '@/lib/whatsapp'
 import { NextRequest, after } from 'next/server'
@@ -102,9 +102,7 @@ async function getOpenEntry(supabase: Supabase, workerId: string) {
 
 const hoursSince = (iso: string) => ((Date.now() - new Date(iso).getTime()) / 3600000).toFixed(1)
 const firstName = (w: Worker) => w.name.split(' ')[0]
-const fmtH = (h: number) => (Math.round(h * 10) / 10).toString()
 const CHANGE_HOURS = ['change hours', 'change hour', 'change', 'fix hours', 'fix hour', 'fix', 'hours', 'edit hours']
-const COMMANDS = ['hi', 'hello', 'hey', 'menu', 'sign in', 'signin', 'in', 'start', 'on', 'off', 'out', 'sign out', 'signout', 'clock off', 'status', '?', 'where am i', ...CHANGE_HOURS]
 
 async function processMessage(from: string, input: Input) {
   const phone = from.startsWith('+') ? from : `+${from}`
@@ -131,30 +129,21 @@ async function processMessage(from: string, input: Input) {
   if (input.kind === 'action') {
     if (input.id === 'signin') return sendJobList(supabase, from, worker)
     if (input.id === 'signout') return signOut(supabase, from, worker)
-    if (input.id === 'finished_earlier') return askFinishedEarlier(supabase, from, worker)
+    // Workers can't change their own hours: old "fix time" buttons point them to the boss
+    if (['finished_earlier', 'missed'].includes(input.id) || input.id.startsWith('miss:') || input.id.startsWith('late_other:')) {
+      await sendText(from, CALL_BOSS)
+      return
+    }
     if (input.id === 'still_working') {
       await sendButtons(from, `No worries — tap Sign out when you finish.`, [{ id: 'signout', title: 'Sign out' }])
       return
     }
-    if (input.id === 'missed') return sendMissedJobList(supabase, from, worker)
-    if (input.id.startsWith('miss:')) return askMissedHours(supabase, from, worker, input.id.slice(5))
     if (input.id.startsWith('job:')) return signIn(supabase, from, worker, { id: input.id.slice(4) })
     if (input.id.startsWith('late_')) return confirmLateFinish(supabase, from, worker, input.id)
     return sendMenu(supabase, from, worker)
   }
 
   const lower = input.value.toLowerCase()
-
-  // Is the bot waiting for a time from this worker (finish time, or missed hours)?
-  const { data: state } = await supabase.from('bot_state').select('*').eq('worker_id', worker.id).maybeSingle()
-  if (state) {
-    const fresh = Date.now() - new Date(state.created_at).getTime() < 24 * 3600000
-    if (!fresh || COMMANDS.includes(lower)) {
-      await supabase.from('bot_state').delete().eq('worker_id', worker.id)
-    } else {
-      return handleTimeReply(supabase, from, worker, state, input.value)
-    }
-  }
 
   // Typed commands still work as a backup
   if (['off', 'clock off', 'out', 'sign out', 'signout'].includes(lower)) return signOut(supabase, from, worker)
@@ -172,10 +161,7 @@ async function processMessage(from: string, input: Input) {
   if (['sign in', 'signin', 'in', 'start', 'on'].includes(lower)) return sendJobList(supabase, from, worker)
 
   if (CHANGE_HOURS.includes(lower)) {
-    await sendButtons(from, `What do you need to change, ${firstName(worker)}?`, [
-      { id: 'finished_earlier', title: 'Change finish time' },
-      { id: 'missed', title: 'Add missed hours' },
-    ])
+    await sendText(from, CALL_BOSS)
     return
   }
 
@@ -252,9 +238,8 @@ async function signIn(supabase: Supabase, from: string, worker: Worker, which: {
   let switched = ''
   if (open) {
     const closed = await closeEntry(supabase, open, new Date(), open.jobs?.day_end)
-    if (closed.flagged) await askForFinishTime(supabase, worker.id, open.id)
     switched = closed.flagged
-      ? `You didn't sign out of ${open.jobs?.code ?? 'your last job'}, so I put ${fmtClock(closed.end)} as the finish. Reply with the real finish time (e.g. 4:30pm) to fix it.\n\n`
+      ? `You didn't sign out of ${open.jobs?.code ?? 'your last job'}, so I put ${fmtClock(closed.end)} as the finish. If that's wrong, call your boss to fix it.\n\n`
       : `Switched from ${open.jobs?.address ?? open.jobs?.code ?? 'your last job'}. `
   }
 
@@ -285,10 +270,9 @@ async function signOut(supabase: Supabase, from: string, worker: Worker) {
   const longAgo = now.getTime() - new Date(open.start_time).getTime() > 16 * 3600000
   const closed = longAgo ? await closeEntry(supabase, open, now, open.jobs?.day_end) : null
   if (closed?.flagged) {
-    await askForFinishTime(supabase, worker.id, open.id)
     await sendText(
       from,
-      `Your sign-in at ${code} was left open, so I've put ${fmtClock(closed.end)} as the finish. Reply with the time you really finished (e.g. 4:30pm) to fix it.`,
+      `Your sign-in at ${code} was left open, so I've put ${fmtClock(closed.end)} as the finish. If that's wrong, call your boss to fix it.`,
     )
     return
   }
@@ -309,11 +293,10 @@ async function signOut(supabase: Supabase, from: string, worker: Worker) {
   if (late && usual) {
     await sendButtons(
       from,
-      `Signed out of ${where} ✓\n\nLooks like you worked ${fmtDuration(onSite)} today (${fmtClock(open.start_time)} to ${fmtClock(end)}). Is that right?${breakNote}`,
+      `Signed out of ${where} ✓\n\nLooks like you worked ${fmtDuration(onSite)} today (${fmtClock(open.start_time)} to ${fmtClock(end)}). Is that right?${breakNote}\n\n(A different time? Call your boss to fix it.)`,
       [
         { id: `late_ok:${open.id}`, title: `Yes, that's right` },
         { id: `late_usual:${open.id}`, title: `No, left ${fmtClock(usual)}`.slice(0, 20) },
-        { id: `late_other:${open.id}`, title: 'Other time' },
       ],
     )
     return
@@ -334,11 +317,6 @@ async function confirmLateFinish(supabase: Supabase, from: string, worker: Worke
   const job = entry.jobs as unknown as { code: string; address: string | null; day_end: string | null } | null
   const where = job?.address ?? job?.code ?? 'the job'
 
-  if (kind === 'late_other') {
-    await askForFinishTime(supabase, worker.id, entry.id)
-    await sendText(from, `What time did you finish at ${where}? Reply like 4:30pm.`)
-    return
-  }
   let end = entry.end_time
   if (kind === 'late_usual') {
     end = usualFinish(entry.start_time, job?.day_end) ?? entry.end_time
@@ -414,141 +392,4 @@ async function currentOrTodaysJob(supabase: Supabase, workerId: string) {
   const rows = (data ?? []) as unknown as { end_time: string | null; jobs: { id: string; code: string; address: string | null; status: string } | null }[]
   const pick = rows.find((r) => !r.end_time) ?? rows[0]
   return pick?.jobs && pick.jobs.status === 'active' ? pick.jobs : null
-}
-
-async function askFinishedEarlier(supabase: Supabase, from: string, worker: Worker) {
-  const open = await getOpenEntry(supabase, worker.id)
-  let entry: { id: string; code: string } | null = open ? { id: open.id, code: open.jobs?.code ?? 'the job' } : null
-  if (!entry) {
-    const { data } = await supabase
-      .from('time_entries')
-      .select('id, jobs(code)')
-      .eq('worker_id', worker.id)
-      .gte('start_time', sydneyTimeOn(todaySydney(), 0) ?? new Date().toISOString())
-      .order('start_time', { ascending: false })
-      .limit(1)
-      .maybeSingle()
-    if (data) entry = { id: data.id, code: (data.jobs as unknown as { code: string } | null)?.code ?? 'the job' }
-  }
-  if (!entry) {
-    await sendButtons(from, `You have no hours today to change.`, [{ id: 'missed', title: 'Add missed hours' }])
-    return
-  }
-  await askForFinishTime(supabase, worker.id, entry.id)
-  await sendText(from, `What time did you finish at ${entry.code}? Reply like 3:30pm.`)
-}
-
-async function sendMissedJobList(supabase: Supabase, from: string, worker: Worker) {
-  const jobs = await activeJobs(supabase)
-  if (!jobs.length) {
-    await sendText(from, `There are no active jobs right now. Check with your boss.`)
-    return
-  }
-  await sendList(
-    from,
-    `Forgot to sign in today, ${firstName(worker)}? Pick the job, then tell me your start and finish times.`,
-    'Choose job',
-    jobs.slice(0, 10).map((j) => ({ id: `miss:${j.id}`, ...jobRow(j) })),
-  )
-}
-
-async function askMissedHours(supabase: Supabase, from: string, worker: Worker, jobId: string) {
-  const { data: job } = await supabase.from('jobs').select('id, code, status').eq('id', jobId).maybeSingle()
-  if (!job || job.status !== 'active') {
-    await sendText(from, `That job isn't active any more.`)
-    return
-  }
-  await supabase
-    .from('bot_state')
-    .upsert({ worker_id: worker.id, kind: 'missed_hours', job_id: job.id, entry_id: null, created_at: new Date().toISOString() })
-  await sendText(from, `What time did you start and finish at ${job.code} today? Reply like 7am-3:30pm.`)
-}
-
-type BotState = { kind: 'finish_time' | 'missed_hours'; entry_id: string | null; job_id: string | null }
-
-async function handleTimeReply(supabase: Supabase, from: string, worker: Worker, state: BotState, text: string) {
-  const done = () => supabase.from('bot_state').delete().eq('worker_id', worker.id)
-  const now = Date.now()
-
-  if (state.kind === 'finish_time') {
-    const { data: entry } = await supabase
-      .from('time_entries')
-      .select('id, start_time, jobs(code)')
-      .eq('id', state.entry_id ?? '')
-      .eq('worker_id', worker.id)
-      .maybeSingle()
-    if (!entry) {
-      await done()
-      return sendMenu(supabase, from, worker)
-    }
-    const minutes = parseClockTime(text)
-    if (minutes == null) {
-      await sendText(from, `Sorry, I didn't get that time. Reply like 4:30pm (or "menu" to cancel).`)
-      return
-    }
-    const end = sydneyTimeOn(sydneyDateOf(entry.start_time), minutes)
-    const startMs = new Date(entry.start_time).getTime()
-    const endMs = end ? new Date(end).getTime() : NaN
-    if (!end || endMs <= startMs || endMs > now + 5 * 60000 || endMs - startMs > 16 * 3600000) {
-      await sendText(from, `That doesn't fit — you signed in at ${fmtClock(entry.start_time)}. Reply with your finish time that day, e.g. 4:30pm.`)
-      return
-    }
-    await supabase
-      .from('time_entries')
-      .update({
-        end_time: end,
-        needs_review: false,
-        review_reason: `Finish time sent by worker on WhatsApp: ${fmtClock(end)}`,
-      })
-      .eq('id', entry.id)
-    await done()
-    const code = (entry.jobs as unknown as { code: string } | null)?.code ?? 'the job'
-    await sendText(from, `Thanks ✓ Finish time at ${code} set to ${fmtClock(end)} — ${fmtH((endMs - startMs) / 3600000)}h on site.`)
-    return
-  }
-
-  // Missed hours: a start–finish range for today
-  const range = parseTimeRange(text)
-  if (!range) {
-    await sendText(from, `Sorry, I didn't get that. Reply with start and finish like 7am-3:30pm (or "menu" to cancel).`)
-    return
-  }
-  const today = todaySydney()
-  const start = sydneyTimeOn(today, range.start)
-  const end = sydneyTimeOn(today, range.end)
-  if (!start || !end || new Date(end).getTime() > now + 5 * 60000) {
-    await sendText(from, `Those times are in the future. Reply with today's start and finish, e.g. 7am-3:30pm.`)
-    return
-  }
-  const { data: overlapping } = await supabase
-    .from('time_entries')
-    .select('start_time, end_time')
-    .eq('worker_id', worker.id)
-    .lt('start_time', end)
-    .or(`end_time.is.null,end_time.gt."${start}"`)
-  if (overlapping?.length) {
-    const o = overlapping[0]
-    await sendText(
-      from,
-      `That overlaps hours you already have today (${fmtClock(o.start_time)}–${o.end_time ? fmtClock(o.end_time) : 'now'}). Ask your boss to fix it.`,
-    )
-    await done()
-    return
-  }
-  const { data: job } = await supabase.from('jobs').select('code').eq('id', state.job_id ?? '').maybeSingle()
-  const { error } = await supabase.from('time_entries').insert({
-    worker_id: worker.id,
-    job_id: state.job_id,
-    start_time: start,
-    end_time: end,
-    source: 'whatsapp',
-    review_reason: 'Added by worker on WhatsApp (forgot to sign in)',
-  })
-  await done()
-  if (error) {
-    console.error('missed hours failed', error)
-    await sendText(from, `Sorry, that didn't save. Please ask your boss to add it.`)
-    return
-  }
-  await sendText(from, `Added ✓ ${fmtClock(start)}–${fmtClock(end)} at ${job?.code ?? 'the job'} today.`)
 }
