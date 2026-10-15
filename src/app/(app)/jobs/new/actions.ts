@@ -1,13 +1,10 @@
 'use server'
 
-import Anthropic from '@anthropic-ai/sdk'
 import { createServiceClient } from '@/lib/supabase'
 import { redirect } from 'next/navigation'
 import { requireAuth } from '@/lib/auth'
 import { cleanJobCode } from '@/lib/format'
-import { AI_MODELS } from '@/lib/ai'
-
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
+import { parseJsonReply, readDocument } from '@/lib/ai'
 
 export async function uploadQuote(formData: FormData) {
   await requireAuth()
@@ -23,26 +20,15 @@ export async function uploadQuote(formData: FormData) {
   }
 
   const bytes = await file.arrayBuffer()
-  const base64 = Buffer.from(bytes).toString('base64')
 
-  // Ask Claude to extract quote details from the PDF
+  // Ask the AI to read the quote details from the PDF
   let extracted = { quote_total: null as number | null, quoted_hours: null as number | null, quoted_materials: null as number | null, po_ref: null as string | null, client_name: clientName || null, address: address || null }
 
   try {
-    const msg = await anthropic.messages.create({
-      model: AI_MODELS.quotes,
-      max_tokens: 1024,
-      messages: [
-        {
-          role: 'user',
-          content: [
-            {
-              type: 'document',
-              source: { type: 'base64', media_type: 'application/pdf', data: base64 },
-            },
-            {
-              type: 'text',
-              text: `Extract from this painting quote PDF and return ONLY valid JSON (no markdown):
+    const text = await readDocument(
+      'quotes',
+      { name: file.name, contentType: 'application/pdf', data: Buffer.from(bytes) },
+      `Extract from this painting quote PDF and return ONLY valid JSON (no markdown):
 {
   "client_name": "string or null",
   "address": "string or null",
@@ -54,14 +40,13 @@ export async function uploadQuote(formData: FormData) {
 The business is GST-registered, so all dollar amounts must be EXCLUDING GST.
 quote_total is the quote price excluding GST (use the subtotal before GST; if only a GST-inclusive total is shown, divide it by 1.1).
 quoted_hours is the estimated labour hours. quoted_materials is the estimated materials cost excluding GST. po_ref is any purchase order number.`,
-            },
-          ],
-        },
-      ],
-    })
-
-    const text = msg.content[0].type === 'text' ? msg.content[0].text.trim() : ''
-    const parsed = JSON.parse(text.slice(text.indexOf('{'), text.lastIndexOf('}') + 1))
+      1024,
+    )
+    const parsed = parseJsonReply<{
+      client_name?: string | null; address?: string | null; quote_total?: number | null
+      quoted_hours?: number | null; quoted_materials?: number | null; po_ref?: string | null
+    }>(text)
+    if (!parsed) throw new Error('unreadable')
     extracted = {
       quote_total: parsed.quote_total ?? null,
       quoted_hours: parsed.quoted_hours ?? null,
@@ -71,7 +56,7 @@ quoted_hours is the estimated labour hours. quoted_materials is the estimated ma
       address: address || parsed.address || null,
     }
   } catch {
-    // Claude failed to parse — create job with what we have
+    // The AI couldn't read it — create job with what we have
   }
 
   const supabase = createServiceClient()

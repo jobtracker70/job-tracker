@@ -5,6 +5,7 @@ import { requireAuth } from '@/lib/auth'
 import { createServiceClient } from '@/lib/supabase'
 import { checkInbox, emailConfigured } from '@/lib/email'
 import { isReadableInvoiceType, processInvoiceFile } from '@/lib/invoices'
+import { isOutOfCredit } from '@/lib/ai'
 import { num, text } from '@/lib/format'
 
 function refresh() {
@@ -28,6 +29,7 @@ export async function uploadInvoice(_prev: string | null, formData: FormData) {
     if (saved.duplicate) return 'Already added before — not counted twice.'
     return saved.status === 'approved' ? '✓ Added to the job automatically.' : '✓ Added — check it below.'
   } catch (e) {
+    if (isOutOfCredit(e)) return "The AI account has run out of credit, so the invoice couldn't be read. Top it up, then upload again."
     return e instanceof Error ? e.message : 'Something went wrong'
   }
 }

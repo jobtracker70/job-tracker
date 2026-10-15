@@ -1,10 +1,7 @@
-import Anthropic from '@anthropic-ai/sdk'
 import { createServiceClient } from './supabase'
 import { compactCode } from './format'
-import { AI_MODELS } from './ai'
+import { parseJsonReply, readDocument } from './ai'
 
-const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY })
-const MODEL = AI_MODELS.receipts
 
 export type InvoiceFile = { name: string; contentType: string; data: Buffer }
 
@@ -54,34 +51,10 @@ Return ONLY valid JSON, no markdown:
 }
 Statements, quotes, marketing and remittance advice are NOT invoices. Credit notes, refund receipts and return receipts DO count (set is_credit true).`
 
-function contentFor(file: InvoiceFile, codes: string[], hint?: string): Anthropic.Messages.ContentBlockParam[] {
-  const ct = file.contentType.toLowerCase()
-  const blocks: Anthropic.Messages.ContentBlockParam[] = []
-  if (ct === 'application/pdf' || /\.pdf$/i.test(file.name)) {
-    blocks.push({ type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: file.data.toString('base64') } })
-  } else if ((IMAGE_TYPES as readonly string[]).includes(ct)) {
-    blocks.push({ type: 'image', source: { type: 'base64', media_type: ct as (typeof IMAGE_TYPES)[number], data: file.data.toString('base64') } })
-  } else {
-    blocks.push({ type: 'text', text: `File "${file.name}":\n${file.data.toString('utf8').slice(0, 60000)}` })
-  }
-  const prompt = promptFor(codes)
-  blocks.push({ type: 'text', text: hint ? `${prompt}\n\nThe email it came with (may contain the job code):\n${hint.slice(0, 3000)}` : prompt })
-  return blocks
-}
-
 export async function extractInvoice(file: InvoiceFile, codes: string[], hint?: string): Promise<Extracted | null> {
-  const msg = await anthropic.messages.create({
-    model: MODEL,
-    max_tokens: 4096,
-    messages: [{ role: 'user', content: contentFor(file, codes, hint) }],
-  })
-  const t = msg.content.find((c) => c.type === 'text')
-  if (!t || t.type !== 'text') return null
-  try {
-    return JSON.parse(t.text.slice(t.text.indexOf('{'), t.text.lastIndexOf('}') + 1)) as Extracted
-  } catch {
-    return null
-  }
+  const prompt = promptFor(codes)
+  const text = await readDocument('receipts', file, hint ? `${prompt}\n\nThe email it came with (may contain the job code):\n${hint.slice(0, 3000)}` : prompt)
+  return parseJsonReply<Extracted>(text)
 }
 
 type JobRef = { id: string; code: string }

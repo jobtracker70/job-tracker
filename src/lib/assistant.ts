@@ -5,11 +5,8 @@ import { forecast, jobNumbers, type JobSummary } from './forecast'
 import { jobPill } from './status'
 import { fmtClock, fmtDate, fmtDuration, sydneyDateOf, sydneyLocalToISO, todaySydney } from './format'
 import { itemsOf } from './items'
-import { AI_MODELS } from './ai'
+import { AI_MODELS, aiProvider, anthropic, kimiChat, type KimiMessage } from './ai'
 
-// Created on first use, so a missing key can't break pages that never ask the AI anything
-let client: Anthropic | null = null
-const ai = () => (client ??= new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY }))
 const MODEL = AI_MODELS.assistant
 const MAX_TURNS = 8
 const MAX_SHIFT_HOURS = 16
@@ -131,7 +128,7 @@ const TOOLS: Anthropic.Messages.Tool[] = [
       'Propose moving an invoice to another job (or off all jobs, back to "needs checking", with job_id null). Does NOT change anything until the owner presses Confirm.',
     input_schema: {
       type: 'object',
-      properties: { invoice_id: { type: 'string' }, job_id: { type: ['string', 'null'] } },
+      properties: { invoice_id: { type: 'string' }, job_id: { type: 'string', description: 'The job to move it to, or "none" to take it off all jobs' } },
       required: ['invoice_id', 'job_id'],
     },
   },
@@ -306,6 +303,7 @@ async function runTool(supabase: Supabase, name: string, input: Input, proposals
     }
 
     case 'propose_move_invoice': {
+      if (input.job_id === 'none' || input.job_id === '') input.job_id = null
       const { data: x } = await supabase
         .from('expenses')
         .select('id, supplier, amount_ex_gst, expense_date, job_id, jobs(code, address)')
@@ -394,8 +392,37 @@ export async function askAssistant(history: ChatMessage[]) {
   while (messages.length && messages[0].role !== 'user') messages.shift()
   if (!messages.length) return { text: 'Ask me anything about your jobs, hours or invoices.', proposals }
 
+  const run = async (name: string, args: Input) => {
+    try {
+      return JSON.stringify(await runTool(supabase, name, args, proposals)).slice(0, 60000)
+    } catch (e) {
+      return JSON.stringify({ error: e instanceof Error ? e.message : 'Something went wrong' })
+    }
+  }
+
+  if (aiProvider() === 'kimi') {
+    const tools = TOOLS.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.input_schema } }))
+    const chat: KimiMessage[] = [{ role: 'system', content: systemPrompt() }, ...messages.map((m) => ({ role: m.role, content: m.content as string }))]
+    for (let turn = 0; turn < MAX_TURNS; turn++) {
+      const reply = await kimiChat({ messages: chat, tools, maxTokens: 2048 })
+      if (!reply) break
+      chat.push({ role: 'assistant', content: reply.content ?? '', ...(reply.tool_calls?.length ? { tool_calls: reply.tool_calls } : {}) })
+      if (!reply.tool_calls?.length) return { text: (typeof reply.content === 'string' && reply.content.trim()) || 'Done.', proposals }
+      for (const call of reply.tool_calls) {
+        let args: Input = {}
+        try {
+          args = JSON.parse(call.function.arguments || '{}')
+        } catch {
+          // leave empty: the tool will say what's missing
+        }
+        chat.push({ role: 'tool', tool_call_id: call.id, name: call.function.name, content: await run(call.function.name, args) })
+      }
+    }
+    return { text: "Sorry, that took too many steps. Try asking in a simpler way.", proposals }
+  }
+
   for (let turn = 0; turn < MAX_TURNS; turn++) {
-    const res = await ai().messages.create({ model: MODEL, max_tokens: 2048, system: systemPrompt(), tools: TOOLS, messages })
+    const res = await anthropic().messages.create({ model: MODEL, max_tokens: 2048, system: systemPrompt(), tools: TOOLS, messages })
     messages.push({ role: 'assistant', content: res.content })
     const calls = res.content.filter((c): c is Anthropic.Messages.ToolUseBlock => c.type === 'tool_use')
     if (res.stop_reason !== 'tool_use' || !calls.length) {
@@ -404,13 +431,7 @@ export async function askAssistant(history: ChatMessage[]) {
     }
     const results: Anthropic.Messages.ToolResultBlockParam[] = []
     for (const call of calls) {
-      let out: unknown
-      try {
-        out = await runTool(supabase, call.name, (call.input ?? {}) as Input, proposals)
-      } catch (e) {
-        out = { error: e instanceof Error ? e.message : 'Something went wrong' }
-      }
-      results.push({ type: 'tool_result', tool_use_id: call.id, content: JSON.stringify(out).slice(0, 60000) })
+      results.push({ type: 'tool_result', tool_use_id: call.id, content: await run(call.name, (call.input ?? {}) as Input) })
     }
     messages.push({ role: 'user', content: results })
   }
