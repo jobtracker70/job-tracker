@@ -73,6 +73,64 @@ export async function kimiChat(body: { messages: KimiMessage[]; tools?: unknown[
   return res.choices?.[0]?.message as KimiMessage | undefined
 }
 
+// Same as kimiChat, but hands over the reply's words as they arrive (onText), so the owner sees the answer being written.
+// Returns the whole message at the end, including any tool calls.
+export async function kimiChatStream(
+  body: { messages: KimiMessage[]; tools?: unknown[]; maxTokens?: number },
+  onText: (text: string) => void,
+): Promise<KimiMessage> {
+  const res = await fetch(`${KIMI_URL}/chat/completions`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${process.env.MOONSHOT_API_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: kimiModel(),
+      messages: body.messages,
+      ...(body.tools ? { tools: body.tools } : {}),
+      max_tokens: body.maxTokens ?? 4096,
+      thinking: { type: 'disabled' },
+      stream: true,
+    }),
+  })
+  if (!res.ok || !res.body) throw new Error(`Kimi ${res.status}: ${(await res.text()).slice(0, 500)}`)
+
+  let content = ''
+  const calls: { id: string; type: 'function'; function: { name: string; arguments: string } }[] = []
+  const reader = res.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+  for (;;) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() ?? ''
+    for (const line of lines) {
+      const data = line.startsWith('data:') ? line.slice(5).trim() : ''
+      if (!data || data === '[DONE]') continue
+      let chunk
+      try {
+        chunk = JSON.parse(data)
+      } catch {
+        continue
+      }
+      const delta = chunk.choices?.[0]?.delta ?? {}
+      if (typeof delta.content === 'string' && delta.content) {
+        content += delta.content
+        onText(delta.content)
+      }
+      for (const tc of delta.tool_calls ?? []) {
+        const i = tc.index ?? calls.length
+        calls[i] ??= { id: '', type: 'function', function: { name: '', arguments: '' } }
+        if (tc.id) calls[i].id = tc.id
+        if (tc.function?.name) calls[i].function.name += tc.function.name
+        if (tc.function?.arguments) calls[i].function.arguments += tc.function.arguments
+      }
+    }
+  }
+  const toolCalls = calls.filter(Boolean)
+  return { role: 'assistant', content, ...(toolCalls.length ? { tool_calls: toolCalls } : {}) }
+}
+
 // Kimi reads PDFs by uploading them and getting the text back
 async function kimiPdfText(file: AiFile) {
   const form = new FormData()

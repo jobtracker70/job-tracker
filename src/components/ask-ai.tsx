@@ -1,12 +1,12 @@
 'use client'
 
-import { useEffect, useRef, useState, useTransition } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
-import { askAction, confirmAction } from '@/app/(app)/assistant-actions'
+import { confirmAction } from '@/app/(app)/assistant-actions'
 import { buttonClass, secondaryButtonClass } from './ui'
 
 type Proposal = { summary: string; token: string; state?: 'done' | 'cancelled' | 'failed'; result?: string }
-type Msg = { role: 'user' | 'assistant'; text: string; proposals?: Proposal[] }
+type Msg = { role: 'user' | 'assistant'; text: string; proposals?: Proposal[]; status?: string; streaming?: boolean }
 
 const EXAMPLES = [
   'How many hours did each person work this week?',
@@ -26,7 +26,7 @@ export function AskAI() {
   const [open, setOpen] = useState(false)
   const [msgs, setMsgs] = useState<Msg[]>([])
   const [input, setInput] = useState('')
-  const [thinking, startThinking] = useTransition()
+  const [thinking, setThinking] = useState(false)
   const [busyToken, setBusyToken] = useState<string | null>(null)
   const router = useRouter()
   const endRef = useRef<HTMLDivElement>(null)
@@ -36,20 +36,46 @@ export function AskAI() {
     endRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [msgs, thinking, open])
 
-  function send(text: string) {
+  async function send(text: string) {
     const q = text.trim()
     if (!q || thinking) return
-    const next: Msg[] = [...msgs, { role: 'user', text: q }]
-    setMsgs(next)
+    const history = [...msgs, { role: 'user' as const, text: q }]
+    setMsgs([...history, { role: 'assistant', text: '', proposals: [], streaming: true }])
     setInput('')
-    startThinking(async () => {
-      try {
-        const res = await askAction(next.map((m) => ({ role: m.role, text: m.text })))
-        setMsgs((cur) => [...cur, { role: 'assistant', text: res.text, proposals: res.proposals }])
-      } catch {
-        setMsgs((cur) => [...cur, { role: 'assistant', text: "Sorry, I couldn't reach the AI just now. Check your internet and try again." }])
+    setThinking(true)
+
+    // Update the answer being written (always the last message)
+    const patch = (fn: (m: Msg) => Msg) => setMsgs((cur) => cur.map((m, i) => (i === cur.length - 1 ? fn(m) : m)))
+    try {
+      const res = await fetch('/api/assistant', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ history: history.map((m) => ({ role: m.role, text: m.text })) }),
+      })
+      if (!res.ok || !res.body) throw new Error(String(res.status))
+      const reader = res.body.getReader()
+      const decoder = new TextDecoder()
+      let buffer = ''
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() ?? ''
+        for (const line of lines) {
+          if (!line.trim()) continue
+          const e = JSON.parse(line)
+          if (e.type === 'text') patch((m) => ({ ...m, text: m.text + e.text, status: undefined }))
+          else if (e.type === 'status') patch((m) => ({ ...m, status: e.text }))
+          else if (e.type === 'proposal') patch((m) => ({ ...m, proposals: [...(m.proposals ?? []), e.proposal] }))
+        }
       }
-    })
+    } catch {
+      patch((m) => ({ ...m, text: m.text || "Sorry, I couldn't reach the AI just now. Check your internet and try again." }))
+    } finally {
+      patch((m) => ({ ...m, streaming: false, status: undefined, text: m.text.trim() || (m.proposals?.length ? '' : 'Sorry, no answer came back. Try again.') }))
+      setThinking(false)
+    }
   }
 
   async function decide(msgIndex: number, token: string, confirm: boolean) {
@@ -101,9 +127,11 @@ export function AskAI() {
 
             {msgs.map((m, i) => (
               <div key={i} className={m.role === 'user' ? 'flex justify-end' : 'space-y-2'}>
-                <div className={`max-w-[88%] whitespace-pre-wrap text-[15px] rounded-2xl px-3.5 py-2.5 ${m.role === 'user' ? 'bg-brand text-white rounded-br-md' : 'bg-white border border-line text-ink rounded-bl-md'}`}>
+                {m.role === 'assistant' && !m.text && m.streaming && <Thinking status={m.status} />}
+                {(m.role === 'user' || m.text) && <div className={`max-w-[88%] whitespace-pre-wrap text-[15px] rounded-2xl px-3.5 py-2.5 ${m.role === 'user' ? 'bg-brand text-white rounded-br-md' : 'bg-white border border-line text-ink rounded-bl-md'}`}>
                   {m.role === 'assistant' ? <Formatted text={m.text} /> : m.text}
-                </div>
+                  {m.streaming && m.text && <span className="inline-block w-1.5 h-4 ml-0.5 align-text-bottom bg-brand/60 animate-pulse" />}
+                </div>}
                 {m.proposals?.map((p) => (
                   <div key={p.token} className="max-w-[92%] bg-white border-2 border-brand/30 rounded-2xl p-3.5 space-y-3">
                     <p className="text-xs font-semibold text-brand uppercase tracking-wide">Change to confirm</p>
@@ -123,7 +151,6 @@ export function AskAI() {
               </div>
             ))}
 
-            {thinking && <Thinking />}
             <div ref={endRef} />
           </div>
 
@@ -157,10 +184,10 @@ function Formatted({ text }: { text: string }) {
   )
 }
 
-// Shows what's happening while the AI works, so a 5–10 second wait doesn't feel stuck
-const STEPS = ['Looking that up…', 'Checking your jobs and hours…', 'Adding it up…', 'Nearly there…']
+// Shows what's happening while the AI works, until the first words arrive
+const STEPS = ['Looking that up…', 'Checking your jobs and hours…', 'Nearly there…']
 
-function Thinking() {
+function Thinking({ status }: { status?: string }) {
   const [step, setStep] = useState(0)
   useEffect(() => {
     const t = setInterval(() => setStep((s) => Math.min(s + 1, STEPS.length - 1)), 2500)
@@ -169,7 +196,7 @@ function Thinking() {
   return (
     <div className="inline-flex items-center gap-2 bg-white border border-line rounded-2xl rounded-bl-md px-3.5 py-2.5 text-muted text-sm">
       <span className="w-2 h-2 rounded-full bg-brand animate-pulse" />
-      {STEPS[step]}
+      {status ?? STEPS[step]}
     </div>
   )
 }

@@ -2,24 +2,7 @@
 
 import { revalidatePath } from 'next/cache'
 import { openPayload, requireAuth } from '@/lib/auth'
-import { applyChange, askAssistant, type Change, type ChatMessage } from '@/lib/assistant'
-import { isOutOfCredit } from '@/lib/ai'
-
-export async function askAction(history: ChatMessage[]) {
-  await requireAuth()
-  try {
-    return await askAssistant(history)
-  } catch (e) {
-    console.error('assistant failed', e)
-    const noCredit = isOutOfCredit(e)
-    return {
-      text: noCredit
-        ? "The AI account has run out of credit, so I can't answer right now. Top it up on the AI provider's website (Billing)."
-        : "Sorry, I couldn't answer that just now. Please try again in a minute.",
-      proposals: [],
-    }
-  }
-}
+import { applyChange, type Change } from '@/lib/assistant'
 
 export async function confirmAction(token: string) {
   await requireAuth()

@@ -5,7 +5,7 @@ import { forecast, jobNumbers, type JobSummary } from './forecast'
 import { jobPill } from './status'
 import { fmtClock, fmtDate, fmtDuration, sydneyDateOf, sydneyLocalToISO, todaySydney } from './format'
 import { itemsOf } from './items'
-import { AI_MODELS, aiProvider, anthropic, kimiChat, type KimiMessage } from './ai'
+import { AI_MODELS, aiProvider, anthropic, kimiChatStream, type KimiMessage } from './ai'
 
 const MODEL = AI_MODELS.assistant
 const MAX_TURNS = 8
@@ -382,7 +382,26 @@ Rules:
 - Workers sign in and out on WhatsApp. Subbies are costed from their invoices, not their hours.${snapshot}`
 }
 
-export async function askAssistant(history: ChatMessage[]) {
+// What the chat panel receives while the AI works
+export type AssistantEvent =
+  | { type: 'status'; text: string }
+  | { type: 'text'; text: string }
+  | { type: 'proposal'; proposal: Proposal }
+  | { type: 'done' }
+
+const STATUS: Record<string, string> = {
+  get_shifts: 'Checking hours…',
+  get_invoices: 'Checking invoices…',
+  who_is_on_site: "Checking who's on site…",
+  list_jobs: 'Checking jobs…',
+  list_workers: 'Checking workers…',
+  propose_change_shift: 'Preparing the change…',
+  propose_add_shift: 'Preparing the change…',
+  propose_move_invoice: 'Preparing the change…',
+}
+
+// Runs the conversation and reports progress through emit: status lines, the answer word by word, and any change cards.
+export async function streamAssistant(history: ChatMessage[], emit: (e: AssistantEvent) => void) {
   const supabase = createServiceClient()
   const proposals: Proposal[] = []
   const messages: Anthropic.Messages.MessageParam[] = history
@@ -390,7 +409,10 @@ export async function askAssistant(history: ChatMessage[]) {
     .slice(-12)
     .map((m) => ({ role: m.role, content: m.text.slice(0, 4000) }))
   while (messages.length && messages[0].role !== 'user') messages.shift()
-  if (!messages.length) return { text: 'Ask me anything about your jobs, hours or invoices.', proposals }
+  if (!messages.length) {
+    emit({ type: 'text', text: 'Ask me anything about your jobs, hours or invoices.' })
+    return
+  }
 
   // Hand the AI the job and worker lists up front, so most questions need one lookup instead of three
   const [jobs, workers] = await Promise.all([
@@ -402,22 +424,28 @@ export async function askAssistant(history: ChatMessage[]) {
       `\n\nWorkers (same as list_workers):\n${JSON.stringify(workers)}`,
   )
 
+  let shown = 0
   const run = async (name: string, args: Input) => {
+    emit({ type: 'status', text: STATUS[name] ?? 'Looking that up…' })
+    let out: string
     try {
-      return JSON.stringify(await runTool(supabase, name, args, proposals)).slice(0, 60000)
+      out = JSON.stringify(await runTool(supabase, name, args, proposals)).slice(0, 60000)
     } catch (e) {
-      return JSON.stringify({ error: e instanceof Error ? e.message : 'Something went wrong' })
+      out = JSON.stringify({ error: e instanceof Error ? e.message : 'Something went wrong' })
     }
+    // Change cards appear as soon as they're ready
+    while (shown < proposals.length) emit({ type: 'proposal', proposal: proposals[shown++] })
+    return out
   }
+  const tooMany = () => emit({ type: 'text', text: 'Sorry, that took too many steps. Try asking in a simpler way.' })
 
   if (aiProvider() === 'kimi') {
     const tools = TOOLS.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.input_schema } }))
     const chat: KimiMessage[] = [{ role: 'system', content: system }, ...messages.map((m) => ({ role: m.role, content: m.content as string }))]
     for (let turn = 0; turn < MAX_TURNS; turn++) {
-      const reply = await kimiChat({ messages: chat, tools, maxTokens: 800 })
-      if (!reply) break
-      chat.push({ role: 'assistant', content: reply.content ?? '', ...(reply.tool_calls?.length ? { tool_calls: reply.tool_calls } : {}) })
-      if (!reply.tool_calls?.length) return { text: (typeof reply.content === 'string' && reply.content.trim()) || 'Done.', proposals }
+      const reply = await kimiChatStream({ messages: chat, tools, maxTokens: 800 }, (text) => emit({ type: 'text', text }))
+      chat.push(reply)
+      if (!reply.tool_calls?.length) return
       for (const call of reply.tool_calls) {
         let args: Input = {}
         try {
@@ -428,22 +456,32 @@ export async function askAssistant(history: ChatMessage[]) {
         chat.push({ role: 'tool', tool_call_id: call.id, name: call.function.name, content: await run(call.function.name, args) })
       }
     }
-    return { text: "Sorry, that took too many steps. Try asking in a simpler way.", proposals }
+    return tooMany()
   }
 
   for (let turn = 0; turn < MAX_TURNS; turn++) {
-    const res = await anthropic().messages.create({ model: MODEL, max_tokens: 2048, system, tools: TOOLS, messages })
+    const stream = anthropic().messages.stream({ model: MODEL, max_tokens: 2048, system, tools: TOOLS, messages })
+    stream.on('text', (text) => emit({ type: 'text', text }))
+    const res = await stream.finalMessage()
     messages.push({ role: 'assistant', content: res.content })
     const calls = res.content.filter((c): c is Anthropic.Messages.ToolUseBlock => c.type === 'tool_use')
-    if (res.stop_reason !== 'tool_use' || !calls.length) {
-      const text = res.content.filter((c) => c.type === 'text').map((c) => (c as Anthropic.Messages.TextBlock).text).join('\n').trim()
-      return { text: text || 'Done.', proposals }
-    }
+    if (res.stop_reason !== 'tool_use' || !calls.length) return
     const results: Anthropic.Messages.ToolResultBlockParam[] = []
     for (const call of calls) {
       results.push({ type: 'tool_result', tool_use_id: call.id, content: await run(call.name, (call.input ?? {}) as Input) })
     }
     messages.push({ role: 'user', content: results })
   }
-  return { text: "Sorry, that took too many steps. Try asking in a simpler way.", proposals }
+  return tooMany()
+}
+
+// The whole answer at once (used by tests)
+export async function askAssistant(history: ChatMessage[]) {
+  let text = ''
+  const proposals: Proposal[] = []
+  await streamAssistant(history, (e) => {
+    if (e.type === 'text') text += e.text
+    if (e.type === 'proposal') proposals.push(e.proposal)
+  })
+  return { text: text.trim() || 'Done.', proposals }
 }
