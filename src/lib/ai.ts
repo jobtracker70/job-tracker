@@ -21,8 +21,9 @@ export type AiTask = keyof typeof AI_MODELS
 
 // Kimi models: one for text and tools, one that can see photos. Override with KIMI_MODEL / KIMI_VISION_MODEL.
 const KIMI_URL = process.env.KIMI_BASE_URL ?? 'https://api.moonshot.ai/v1'
-const kimiModel = () => process.env.KIMI_MODEL ?? 'kimi-k2-turbo-preview'
-const kimiVisionModel = () => process.env.KIMI_VISION_MODEL ?? 'moonshot-v1-32k-vision-preview'
+// kimi-k2.6 reads photos too; with "thinking" off it answers in a second or two and uses far fewer tokens
+const kimiModel = () => process.env.KIMI_MODEL ?? 'kimi-k2.6'
+const kimiVisionModel = () => process.env.KIMI_VISION_MODEL ?? kimiModel()
 
 let anthropicClient: Anthropic | null = null
 export const anthropic = () => (anthropicClient ??= new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY }))
@@ -66,7 +67,7 @@ export async function kimiChat(body: { messages: KimiMessage[]; tools?: unknown[
       messages: body.messages,
       ...(body.tools ? { tools: body.tools } : {}),
       max_tokens: body.maxTokens ?? 4096,
-      temperature: 0.3,
+      thinking: { type: 'disabled' },
     }),
   })
   return res.choices?.[0]?.message as KimiMessage | undefined

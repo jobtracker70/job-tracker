@@ -102,7 +102,7 @@ export function AskAI() {
             {msgs.map((m, i) => (
               <div key={i} className={m.role === 'user' ? 'flex justify-end' : 'space-y-2'}>
                 <div className={`max-w-[88%] whitespace-pre-wrap text-[15px] rounded-2xl px-3.5 py-2.5 ${m.role === 'user' ? 'bg-brand text-white rounded-br-md' : 'bg-white border border-line text-ink rounded-bl-md'}`}>
-                  {m.text}
+                  {m.role === 'assistant' ? <Formatted text={m.text} /> : m.text}
                 </div>
                 {m.proposals?.map((p) => (
                   <div key={p.token} className="max-w-[92%] bg-white border-2 border-brand/30 rounded-2xl p-3.5 space-y-3">
@@ -141,6 +141,17 @@ export function AskAI() {
             <button disabled={thinking || !input.trim()} className={`${buttonClass} !px-4`}>Send</button>
           </form>
         </div>
+      )}
+    </>
+  )
+}
+
+// The AI sometimes uses **bold**: show it as bold instead of asterisks
+function Formatted({ text }: { text: string }) {
+  return (
+    <>
+      {text.split(/(\*\*[^*]+\*\*)/g).map((part, i) =>
+        part.startsWith('**') && part.endsWith('**') ? <strong key={i}>{part.slice(2, -2)}</strong> : part.replace(/^#+\s*/gm, ''),
       )}
     </>
   )
