@@ -123,7 +123,7 @@ export function AskAI() {
               </div>
             ))}
 
-            {thinking && <div className="inline-block bg-white border border-line rounded-2xl rounded-bl-md px-3.5 py-2.5 text-muted text-sm">Looking that up…</div>}
+            {thinking && <Thinking />}
             <div ref={endRef} />
           </div>
 
@@ -154,5 +154,22 @@ function Formatted({ text }: { text: string }) {
         part.startsWith('**') && part.endsWith('**') ? <strong key={i}>{part.slice(2, -2)}</strong> : part.replace(/^#+\s*/gm, ''),
       )}
     </>
+  )
+}
+
+// Shows what's happening while the AI works, so a 5–10 second wait doesn't feel stuck
+const STEPS = ['Looking that up…', 'Checking your jobs and hours…', 'Adding it up…', 'Nearly there…']
+
+function Thinking() {
+  const [step, setStep] = useState(0)
+  useEffect(() => {
+    const t = setInterval(() => setStep((s) => Math.min(s + 1, STEPS.length - 1)), 2500)
+    return () => clearInterval(t)
+  }, [])
+  return (
+    <div className="inline-flex items-center gap-2 bg-white border border-line rounded-2xl rounded-bl-md px-3.5 py-2.5 text-muted text-sm">
+      <span className="w-2 h-2 rounded-full bg-brand animate-pulse" />
+      {STEPS[step]}
+    </div>
   )
 }

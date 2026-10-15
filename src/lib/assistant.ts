@@ -366,7 +366,7 @@ export async function applyChange(change: Change): Promise<string> {
 
 export type ChatMessage = { role: 'user' | 'assistant'; text: string }
 
-function systemPrompt() {
+function systemPrompt(snapshot = '') {
   const today = todaySydney()
   const weekday = new Date(`${today}T00:00:00Z`).toLocaleDateString('en-AU', { weekday: 'long', timeZone: 'UTC' })
   return `You are the assistant inside BrushBooks, a job-profit app for a small painting business in NSW, Australia. You help the owner understand their jobs, hours and invoices, and make small fixes.
@@ -379,7 +379,7 @@ Rules:
 - If a name or job is ambiguous (e.g. two people called Sam, or "the Dulux invoice" matches several), ask which one before doing anything.
 - To change something, use a propose_ tool. It does NOT change anything: the owner sees a card below your message and must press Confirm. Never say "done" or that a change is made; say something like "Here's the change, tap Confirm to save it."
 - You can change shift times, move a shift to another job, add missed hours, and move an invoice to another job. You cannot delete anything, change pay rates, workers or job details: tell the owner where to do that in the app (Hours, Invoices, Workers pages, or the job's "Edit job details").
-- Workers sign in and out on WhatsApp. Subbies are costed from their invoices, not their hours.`
+- Workers sign in and out on WhatsApp. Subbies are costed from their invoices, not their hours.${snapshot}`
 }
 
 export async function askAssistant(history: ChatMessage[]) {
@@ -392,6 +392,16 @@ export async function askAssistant(history: ChatMessage[]) {
   while (messages.length && messages[0].role !== 'user') messages.shift()
   if (!messages.length) return { text: 'Ask me anything about your jobs, hours or invoices.', proposals }
 
+  // Hand the AI the job and worker lists up front, so most questions need one lookup instead of three
+  const [jobs, workers] = await Promise.all([
+    runTool(supabase, 'list_jobs', {}, proposals),
+    runTool(supabase, 'list_workers', {}, proposals),
+  ])
+  const system = systemPrompt(
+    `\n\nCurrent jobs (same as list_jobs, no need to call it again):\n${JSON.stringify(jobs)}` +
+      `\n\nWorkers (same as list_workers):\n${JSON.stringify(workers)}`,
+  )
+
   const run = async (name: string, args: Input) => {
     try {
       return JSON.stringify(await runTool(supabase, name, args, proposals)).slice(0, 60000)
@@ -402,7 +412,7 @@ export async function askAssistant(history: ChatMessage[]) {
 
   if (aiProvider() === 'kimi') {
     const tools = TOOLS.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.input_schema } }))
-    const chat: KimiMessage[] = [{ role: 'system', content: systemPrompt() }, ...messages.map((m) => ({ role: m.role, content: m.content as string }))]
+    const chat: KimiMessage[] = [{ role: 'system', content: system }, ...messages.map((m) => ({ role: m.role, content: m.content as string }))]
     for (let turn = 0; turn < MAX_TURNS; turn++) {
       const reply = await kimiChat({ messages: chat, tools, maxTokens: 2048 })
       if (!reply) break
@@ -422,7 +432,7 @@ export async function askAssistant(history: ChatMessage[]) {
   }
 
   for (let turn = 0; turn < MAX_TURNS; turn++) {
-    const res = await anthropic().messages.create({ model: MODEL, max_tokens: 2048, system: systemPrompt(), tools: TOOLS, messages })
+    const res = await anthropic().messages.create({ model: MODEL, max_tokens: 2048, system, tools: TOOLS, messages })
     messages.push({ role: 'assistant', content: res.content })
     const calls = res.content.filter((c): c is Anthropic.Messages.ToolUseBlock => c.type === 'tool_use')
     if (res.stop_reason !== 'tool_use' || !calls.length) {
