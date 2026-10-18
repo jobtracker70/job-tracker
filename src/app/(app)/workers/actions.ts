@@ -1,8 +1,7 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
-import { requireAuth } from '@/lib/auth'
-import { createServiceClient } from '@/lib/supabase'
+import { getDb } from '@/lib/db'
 import { num, phoneE164, text, todaySydney } from '@/lib/format'
 
 const TYPES = ['employee', 'apprentice', 'subbie', 'subbie_fixed']
@@ -19,15 +18,14 @@ function rateFields(formData: FormData, type: string) {
 }
 
 export async function addWorker(_prev: string | null, formData: FormData) {
-  await requireAuth()
   const name = text(formData.get('name'))
   const phoneRaw = text(formData.get('phone'))
   const type = String(formData.get('type'))
   if (!name || !phoneRaw) return 'Name and phone are required'
   if (!TYPES.includes(type)) return 'Pick a worker type'
 
-  const supabase = createServiceClient()
-  const { data: worker, error } = await supabase
+  const { db } = await getDb()
+  const { data: worker, error } = await db
     .from('workers')
     .insert({
       name,
@@ -38,31 +36,31 @@ export async function addWorker(_prev: string | null, formData: FormData) {
     })
     .select('id')
     .single()
-  if (error) return error.code === '23505' ? 'That phone number is already added' : error.message
+  if (error) return error.code === '23505' ? 'That phone number is already used by another worker (WhatsApp numbers can only belong to one worker)' : error.message
 
   const rates = rateFields(formData, type)
   if (rates.base_rate != null) {
-    await supabase.from('worker_rates').insert({ worker_id: worker.id, effective_from: todaySydney(), ...rates })
+    await db.raw.from('worker_rates').insert({ worker_id: worker.id, effective_from: todaySydney(), ...rates })
   }
   revalidatePath('/workers')
   return null
 }
 
 export async function setRate(workerId: string, type: string, formData: FormData) {
-  await requireAuth()
   const rates = rateFields(formData, type)
   if (rates.base_rate == null) return
-  await createServiceClient()
+  const { db } = await getDb()
+  if (!(await db.owns('workers', workerId))) return
+  await db.raw
     .from('worker_rates')
     .insert({ worker_id: workerId, effective_from: text(formData.get('effective_from')) ?? todaySydney(), ...rates })
   revalidatePath('/workers')
 }
 
 export async function updateWorker(workerId: string, formData: FormData) {
-  await requireAuth()
   const phoneRaw = text(formData.get('phone'))
   const type = String(formData.get('type') ?? '')
-  await createServiceClient()
+  await (await getDb()).db
     .from('workers')
     .update({
       name: text(formData.get('name')) ?? undefined,
@@ -76,7 +74,6 @@ export async function updateWorker(workerId: string, formData: FormData) {
 }
 
 export async function setActive(workerId: string, active: boolean) {
-  await requireAuth()
-  await createServiceClient().from('workers').update({ active }).eq('id', workerId)
+  await (await getDb()).db.from('workers').update({ active }).eq('id', workerId)
   revalidatePath('/workers')
 }

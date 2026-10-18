@@ -2,8 +2,7 @@
 
 import { revalidatePath } from 'next/cache'
 import { redirect } from 'next/navigation'
-import { requireAuth } from '@/lib/auth'
-import { createServiceClient } from '@/lib/supabase'
+import { getDb } from '@/lib/db'
 import { sydneyLocalToISO, text } from '@/lib/format'
 
 function done(back: string) {
@@ -23,18 +22,23 @@ function readTimes(formData: FormData) {
   return { start, end }
 }
 
-const backTo = (formData: FormData) => String(formData.get('back') || '/hours')
+// Only ever go back to a page inside the app
+const backTo = (formData: FormData) => {
+  const back = String(formData.get('back') || '/hours')
+  return back.startsWith('/') && !back.startsWith('//') ? back : '/hours'
+}
 const withError = (back: string, msg: string) => `${back}${back.includes('?') ? '&' : '?'}error=${encodeURIComponent(msg)}`
 
 export async function addEntry(formData: FormData) {
-  await requireAuth()
+  const { db } = await getDb()
   const back = backTo(formData)
   const t = readTimes(formData)
   const workerId = text(formData.get('worker_id'))
   const jobId = text(formData.get('job_id'))
   if ('error' in t) redirect(withError(back, t.error!))
   if (!workerId || !jobId) redirect(withError(back, 'Pick a worker and a job'))
-  await createServiceClient().from('time_entries').insert({
+  if (!(await db.owns('workers', workerId)) || !(await db.owns('jobs', jobId))) redirect(withError(back, 'Pick a worker and a job'))
+  await db.from('time_entries').insert({
     worker_id: workerId,
     job_id: jobId,
     start_time: t.start,
@@ -47,16 +51,18 @@ export async function addEntry(formData: FormData) {
 }
 
 export async function updateEntry(entryId: string, formData: FormData) {
-  await requireAuth()
+  const { db } = await getDb()
   const back = backTo(formData)
   const t = readTimes(formData)
   if ('error' in t) redirect(withError(back, t.error!))
-  await createServiceClient()
+  const jobId = text(formData.get('job_id'))
+  if (jobId && !(await db.owns('jobs', jobId))) redirect(withError(back, 'Pick a job'))
+  await db
     .from('time_entries')
     .update({
       start_time: t.start,
       end_time: t.end,
-      job_id: text(formData.get('job_id')) ?? undefined,
+      job_id: jobId ?? undefined,
       edited_by: 'owner',
       needs_review: false,
       review_reason: 'Changed by owner',
@@ -66,13 +72,13 @@ export async function updateEntry(entryId: string, formData: FormData) {
 }
 
 export async function markReviewed(entryId: string, back: string) {
-  await requireAuth()
-  await createServiceClient().from('time_entries').update({ needs_review: false, edited_by: 'owner' }).eq('id', entryId)
+  const { db } = await getDb()
+  await db.from('time_entries').update({ needs_review: false, edited_by: 'owner' }).eq('id', entryId)
   done(back)
 }
 
 export async function deleteEntry(entryId: string, back: string) {
-  await requireAuth()
-  await createServiceClient().from('time_entries').delete().eq('id', entryId)
+  const { db } = await getDb()
+  await db.from('time_entries').delete().eq('id', entryId)
   done(back)
 }

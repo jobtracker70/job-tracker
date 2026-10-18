@@ -1,13 +1,12 @@
 'use server'
 
-import { createServiceClient } from '@/lib/supabase'
+import { getDb } from '@/lib/db'
 import { redirect } from 'next/navigation'
-import { requireAuth } from '@/lib/auth'
 import { cleanJobCode } from '@/lib/format'
 import { parseJsonReply, readDocument } from '@/lib/ai'
 
 export async function uploadQuote(formData: FormData) {
-  await requireAuth()
+  const { db } = await getDb()
   const file = formData.get('pdf') as File | null
   const clientName = formData.get('client_name') as string
   const address = formData.get('address') as string
@@ -59,12 +58,10 @@ quoted_hours is the estimated labour hours. quoted_materials is the estimated ma
     // The AI couldn't read it — create job with what we have
   }
 
-  const supabase = createServiceClient()
-
-  // Upload PDF to storage
-  const fileName = `${Date.now()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`
+  // Upload PDF to storage (in this business's folder)
+  const fileName = `${db.businessId}/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`
   let pdfPath: string | null = null
-  const { error: storageError } = await supabase.storage
+  const { error: storageError } = await db.storage
     .from('quotes')
     .upload(fileName, bytes, { contentType: 'application/pdf' })
   if (!storageError) {
@@ -72,7 +69,7 @@ quoted_hours is the estimated labour hours. quoted_materials is the estimated ma
   }
 
   // Create the job (blank code = the database picks the next J-number)
-  const { data: job, error } = await supabase
+  const { data: job, error } = await db
     .from('jobs')
     .insert({
       code: jobCode ?? '',

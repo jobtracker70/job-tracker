@@ -2,21 +2,19 @@
 
 import { cookies } from 'next/headers'
 import { redirect } from 'next/navigation'
-import { SESSION_COOKIE, SESSION_MAX_AGE, checkPassword, createSessionValue } from '@/lib/auth'
+import { SESSION_COOKIE, checkLogin, setSessionCookie } from '@/lib/auth'
+import { createServiceClient } from '@/lib/supabase'
 
 export async function login(_prev: string | null, formData: FormData) {
+  const email = String(formData.get('email') ?? '')
   const password = String(formData.get('password') ?? '')
-  if (!(await checkPassword(password))) {
+  const user = await checkLogin(email, password)
+  if (!user) {
     await new Promise((r) => setTimeout(r, 1000))
-    return 'Wrong password'
+    return 'Wrong email or password'
   }
-  ;(await cookies()).set(SESSION_COOKIE, createSessionValue(), {
-    httpOnly: true,
-    secure: process.env.NODE_ENV === 'production',
-    sameSite: 'lax',
-    maxAge: SESSION_MAX_AGE,
-    path: '/',
-  })
+  await createServiceClient().from('app_users').update({ last_login_at: new Date().toISOString() }).eq('id', user.id)
+  await setSessionCookie(user.id, user.business_id)
   redirect('/')
 }
 

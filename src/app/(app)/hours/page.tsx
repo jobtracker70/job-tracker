@@ -1,5 +1,5 @@
 import Link from 'next/link'
-import { createServiceClient } from '@/lib/supabase'
+import { getDb } from '@/lib/db'
 import { shiftsToCheck } from '@/lib/checks'
 import { fmtClock, fmtDate, fmtDuration, hrs, money, sydneyMidnightISO, timeToMinutes, toSydneyLocalInput, todaySydney } from '@/lib/format'
 import { DEFAULT_END, DEFAULT_START } from '@/lib/hours'
@@ -25,21 +25,21 @@ const jobName = (j: Job | undefined) => j?.address ?? j?.code ?? 'a job'
 
 export default async function HoursPage({ searchParams }: { searchParams: Promise<{ job?: string; error?: string; add?: string }> }) {
   const { job: jobFilter, error, add } = await searchParams
-  const supabase = createServiceClient()
+  const { db } = await getDb()
   const today = todaySydney()
   const twoWeeksAgo = new Date(`${today}T00:00:00Z`)
   twoWeeksAgo.setUTCDate(twoWeeksAgo.getUTCDate() - 14)
 
-  let recentQuery = supabase.from('time_entry_costs').select('*').order('start_time', { ascending: false }).limit(300)
+  let recentQuery = db.from('time_entry_costs').select('*').order('start_time', { ascending: false }).limit(300)
   recentQuery = jobFilter ? recentQuery.eq('job_id', jobFilter) : recentQuery.gte('start_time', sydneyMidnightISO(twoWeeksAgo.toISOString().slice(0, 10)))
 
   const [{ data: recentData }, toCheck, { data: todayData }, { data: openData }, { data: workers }, { data: jobsData }] = await Promise.all([
     recentQuery,
-    shiftsToCheck(supabase),
-    supabase.from('time_entries').select('worker_id').gte('start_time', sydneyMidnightISO(today)),
-    supabase.from('time_entries').select('id, start_time, workers(name), jobs(code, address)').is('end_time', null).order('start_time'),
-    supabase.from('workers').select('id, name, type, phone').eq('active', true).order('name'),
-    supabase.from('jobs').select('id, code, client_name, address, status, day_start, day_end').in('status', ['active', 'complete', 'invoiced', 'paid']).order('created_at', { ascending: false }),
+    shiftsToCheck(db),
+    db.from('time_entries').select('worker_id').gte('start_time', sydneyMidnightISO(today)),
+    db.from('time_entries').select('id, start_time, workers(name), jobs(code, address)').is('end_time', null).order('start_time'),
+    db.from('workers').select('id, name, type, phone').eq('active', true).order('name'),
+    db.from('jobs').select('id, code, client_name, address, status, day_start, day_end').in('status', ['active', 'complete', 'invoiced', 'paid']).order('created_at', { ascending: false }),
   ])
   const recent = (recentData ?? []) as Entry[]
   const jobs = (jobsData ?? []) as Job[]

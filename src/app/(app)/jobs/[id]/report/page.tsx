@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
+import { getDb } from '@/lib/db'
 import { fmtDate, hrs, money, moneyCents, sydneyDateOf, workingDaysBetween } from '@/lib/format'
 import { isSubbieType, loadJob, peopleOnJob, weekLabel } from '@/lib/job-data'
 import { fmtQty, itemsOf, totalItems } from '@/lib/items'
@@ -15,7 +16,8 @@ const signedHrs = (n: number) => `${n > 0 ? '+' : ''}${hrs(n)}`
 
 export default async function JobReportPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
-  const data = await loadJob(id)
+  const { db } = await getDb()
+  const data = await loadJob(db, id)
   if (!data) notFound()
   const { j, job, entries, expenses, variations, subbieRows, nums } = data
   const finished = ['complete', 'invoiced', 'paid'].includes(j.status)

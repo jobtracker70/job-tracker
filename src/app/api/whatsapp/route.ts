@@ -1,5 +1,6 @@
 import { createHmac, timingSafeEqual } from 'node:crypto'
 import { createServiceClient } from '@/lib/supabase'
+import { businessDb, type BusinessDb } from '@/lib/db'
 import { compactCode, fmtClock, fmtDuration, money, sydneyTimeOn, todaySydney } from '@/lib/format'
 import { CALL_BOSS, closeEntry, finishTimeFor, startTimeFor, usualFinish } from '@/lib/hours'
 import { isReadableInvoiceType, processInvoiceFile } from '@/lib/invoices'
@@ -13,8 +14,9 @@ const VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN!
 
 type Media = { id: string; mime: string; filename?: string; caption?: string }
 type Input = { kind: 'text'; value: string } | { kind: 'action'; id: string } | { kind: 'media'; media: Media }
-type Supabase = ReturnType<typeof createServiceClient>
-type Worker = { id: string; name: string; break_minutes: number }
+// Everything the bot does for a worker is limited to their employer's business
+type Supabase = BusinessDb
+type Worker = { id: string; name: string; break_minutes: number; business_id: string }
 type OpenEntry = {
   id: string; job_id: string; start_time: string
   jobs: { code: string; client_name: string | null; address: string | null; day_end: string | null } | null
@@ -106,11 +108,11 @@ const CHANGE_HOURS = ['change hours', 'change hour', 'change', 'fix hours', 'fix
 
 async function processMessage(from: string, input: Input) {
   const phone = from.startsWith('+') ? from : `+${from}`
-  const supabase = createServiceClient()
+  const raw = createServiceClient()
 
-  const { data: worker } = await supabase
+  const { data: worker } = await raw
     .from('workers')
-    .select('id, name, active, break_minutes')
+    .select('id, name, active, break_minutes, business_id')
     .eq('phone', phone)
     .maybeSingle()
 
@@ -122,6 +124,8 @@ async function processMessage(from: string, input: Input) {
     await sendText(from, `Your account is inactive. Contact your boss.`)
     return
   }
+
+  const supabase = businessDb(worker.business_id)
 
   if (input.kind === 'media') return handleReceipt(supabase, from, worker, input.media)
 
@@ -237,7 +241,7 @@ async function signIn(supabase: Supabase, from: string, worker: Worker, which: {
 
   let switched = ''
   if (open) {
-    const closed = await closeEntry(supabase, open, new Date(), open.jobs?.day_end)
+    const closed = await closeEntry(supabase.raw, open, new Date(), open.jobs?.day_end)
     switched = closed.flagged
       ? `You didn't sign out of ${open.jobs?.code ?? 'your last job'}, so I put ${fmtClock(closed.end)} as the finish. If that's wrong, call your boss to fix it.\n\n`
       : `Switched from ${open.jobs?.address ?? open.jobs?.code ?? 'your last job'}. `
@@ -268,7 +272,7 @@ async function signOut(supabase: Supabase, from: string, worker: Worker) {
   const where = open.jobs?.address ?? code
   const now = new Date()
   const longAgo = now.getTime() - new Date(open.start_time).getTime() > 16 * 3600000
-  const closed = longAgo ? await closeEntry(supabase, open, now, open.jobs?.day_end) : null
+  const closed = longAgo ? await closeEntry(supabase.raw, open, now, open.jobs?.day_end) : null
   if (closed?.flagged) {
     await sendText(
       from,
@@ -345,7 +349,7 @@ async function handleReceipt(supabase: Supabase, from: string, worker: Worker, m
   try {
     saved = await processInvoiceFile(
       { name, contentType: file.contentType, data: file.data },
-      { source: 'whatsapp', hint: media.caption, submittedBy: worker.id },
+      { source: 'whatsapp', businessId: worker.business_id, hint: media.caption, submittedBy: worker.id },
     )
   } catch (e) {
     console.error('receipt failed', e)

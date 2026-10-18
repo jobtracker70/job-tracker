@@ -1,7 +1,7 @@
-import { createServiceClient } from './supabase'
+import type { BusinessDb } from './db'
 import { fmtClock } from './format'
 
-type Supabase = ReturnType<typeof createServiceClient>
+type Supabase = BusinessDb
 
 export type ShiftToCheck = {
   id: string

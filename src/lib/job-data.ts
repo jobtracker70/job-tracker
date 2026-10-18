@@ -1,4 +1,4 @@
-import { createServiceClient } from './supabase'
+import type { BusinessDb } from './db'
 import { forecast, jobNumbers, type JobSummary } from './forecast'
 
 export type JobEntry = {
@@ -16,20 +16,19 @@ export type SubbieRow = { key: string; name: string; fixed: boolean; logged: num
 
 export const isSubbieType = (t: string) => t === 'subbie' || t === 'subbie_fixed'
 
-export async function loadJob(id: string) {
-  const supabase = createServiceClient()
+export async function loadJob(db: BusinessDb, id: string) {
   const [{ data: summary }, { data: job }, { data: entriesData }, { data: expensesData }, { data: variations }, { data: subbies }] =
     await Promise.all([
-      supabase.from('job_summary').select('*').eq('id', id).maybeSingle(),
-      supabase.from('jobs').select('quote_pdf_path, po_ref, decided_at, completed_at, day_start, day_end').eq('id', id).maybeSingle(),
-      supabase.from('time_entry_costs').select('*').eq('job_id', id).order('start_time', { ascending: false }),
-      supabase
+      db.from('job_summary').select('*').eq('id', id).maybeSingle(),
+      db.from('jobs').select('quote_pdf_path, po_ref, decided_at, completed_at, day_start, day_end').eq('id', id).maybeSingle(),
+      db.from('time_entry_costs').select('*').eq('job_id', id).order('start_time', { ascending: false }),
+      db
         .from('expenses')
         .select('id, supplier, total, gst, amount_ex_gst, is_credit, hours, expense_date, status, category, worker_id, invoice_number, image_path, source, note, line_items')
         .eq('job_id', id)
         .order('expense_date', { ascending: false }),
-      supabase.from('variations').select('id, description, amount, hours, materials, created_at').eq('job_id', id).order('created_at'),
-      supabase.from('workers').select('id, name, type').in('type', ['subbie', 'subbie_fixed']),
+      db.from('variations').select('id, description, amount, hours, materials, created_at').eq('job_id', id).order('created_at'),
+      db.from('workers').select('id, name, type').in('type', ['subbie', 'subbie_fixed']),
     ])
   if (!summary || !job) return null
 
@@ -68,7 +67,7 @@ export async function loadJob(id: string) {
   const nums = jobNumbers(j, subbieHours)
   const f = forecast(j, nums)
 
-  return { j, job, entries, expenses, variations: variations ?? [], subbieRows, nums, f, supabase }
+  return { j, job, entries, expenses, variations: variations ?? [], subbieRows, nums, f, db }
 }
 
 // Monday (YYYY-MM-DD) of the week a work day falls in

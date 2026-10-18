@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
+import { getDb } from '@/lib/db'
 import { isSubbieType, loadJob, peopleOnJob } from '@/lib/job-data'
 import { FINISHED, jobPill, jobSentence, jobSubtitle, jobTitle } from '@/lib/status'
 import { fmtDate, fmtTimeOfDay, hrs, money, moneyCents, timeToMinutes, todaySydney } from '@/lib/format'
@@ -15,13 +16,14 @@ export const dynamic = 'force-dynamic'
 export default async function JobPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<{ codeError?: string }> }) {
   const { id } = await params
   const { codeError } = await searchParams
-  const data = await loadJob(id)
+  const { db } = await getDb()
+  const data = await loadJob(db, id)
   if (!data) notFound()
-  const { j, job, entries, expenses, variations, subbieRows, nums, f, supabase } = data
+  const { j, job, entries, expenses, variations, subbieRows, nums, f } = data
 
   const pill = jobPill(j, f)
   const pdfUrl = job.quote_pdf_path
-    ? (await supabase.storage.from('quotes').createSignedUrl(job.quote_pdf_path, 3600)).data?.signedUrl
+    ? (await db.storage.from('quotes').createSignedUrl(job.quote_pdf_path, 3600)).data?.signedUrl
     : null
   const finished = FINISHED.includes(j.status)
 

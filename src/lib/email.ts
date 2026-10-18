@@ -3,6 +3,10 @@ import { simpleParser } from 'mailparser'
 import { createServiceClient } from './supabase'
 import { isReadableInvoiceType, processInvoiceFile } from './invoices'
 
+// The receipts inbox (IMAP_… settings) belongs to one business: EMAIL_BUSINESS_ID, or the first business.
+// Other businesses' inboxes come later, with per-business email settings.
+export const emailBusinessId = () => process.env.EMAIL_BUSINESS_ID ?? '00000000-0000-0000-0000-000000000001'
+
 export function emailConfigured() {
   return !!(process.env.IMAP_HOST && process.env.IMAP_USER && process.env.IMAP_PASSWORD)
 }
@@ -54,7 +58,7 @@ export async function checkInbox({ days = 7, timeBudgetMs = 45000 } = {}): Promi
         try {
           const saved = await processInvoiceFile(
             { name, contentType: att.contentType, data: att.content },
-            { source: 'email', emailMessageId: messageId, hint },
+            { source: 'email', businessId: emailBusinessId(), emailMessageId: messageId, hint },
           )
           if (saved) found++
         } catch (e) {
@@ -70,7 +74,7 @@ export async function checkInbox({ days = 7, timeBudgetMs = 45000 } = {}): Promi
           const text = `Subject: ${parsed.subject ?? ''}\nFrom: ${parsed.from?.text ?? ''}\nDate: ${parsed.date?.toISOString() ?? ''}\n\n${body.slice(0, 20000)}`
           const saved = await processInvoiceFile(
             { name: `${(parsed.subject ?? 'email').replace(/[^\w .-]/g, '').slice(0, 50) || 'email'}.txt`, contentType: 'text/plain', data: Buffer.from(text) },
-            { source: 'email', emailMessageId: messageId, hint },
+            { source: 'email', businessId: emailBusinessId(), emailMessageId: messageId, hint },
           )
           if (saved) found++
         } catch (e) {

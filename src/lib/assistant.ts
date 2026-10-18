@@ -1,5 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk'
-import { createServiceClient } from './supabase'
+import type { BusinessDb } from './db'
 import { sealPayload } from './auth'
 import { forecast, jobNumbers, type JobSummary } from './forecast'
 import { jobPill } from './status'
@@ -11,7 +11,7 @@ const MODEL = AI_MODELS.assistant
 const MAX_TURNS = 8
 const MAX_SHIFT_HOURS = 16
 
-type Supabase = ReturnType<typeof createServiceClient>
+type Supabase = BusinessDb
 
 // ---------- Changes the AI can propose (the owner must press Confirm) ----------
 
@@ -23,7 +23,7 @@ export type Change =
 export type Proposal = { summary: string; token: string }
 
 const EXPIRES_MIN = 30
-const seal = (change: Change) => sealPayload({ change, exp: Date.now() + EXPIRES_MIN * 60000 })
+const seal = (b: string, change: Change) => sealPayload({ change, b, exp: Date.now() + EXPIRES_MIN * 60000 })
 
 const dayLabel = (iso: string) =>
   new Date(iso).toLocaleDateString('en-AU', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'Australia/Sydney' })
@@ -277,7 +277,7 @@ async function runTool(supabase: Supabase, name: string, input: Input, proposals
         `Change ${name}'s shift on ${dayLabel(e.start_time)} at ${site(oldJob)}\n` +
         `from ${span(e.start_time, e.end_time)}\n` +
         `to ${moving ? `${site(newJob)}, ` : ''}${dayLabel(t.start!) !== dayLabel(e.start_time) ? `${dayLabel(t.start!)} ` : ''}${span(t.start!, t.end ?? null)}`
-      proposals.push({ summary, token: seal({ kind: 'change_shift', shiftId: e.id, start: t.start!, end: t.end ?? null, jobId: input.job_id || e.job_id }) })
+      proposals.push({ summary, token: seal(supabase.businessId, { kind: 'change_shift', shiftId: e.id, start: t.start!, end: t.end ?? null, jobId: input.job_id || e.job_id }) })
       return { shown_to_owner: summary, note: 'Not changed yet. The owner must press Confirm.' }
     }
 
@@ -298,7 +298,7 @@ async function runTool(supabase: Supabase, name: string, input: Input, proposals
         .or(`end_time.is.null,end_time.gt."${t.start}"`)
       if (overlap?.length) return { error: `That overlaps a shift ${w.name} already has (${span(overlap[0].start_time, overlap[0].end_time)}). Change that shift instead.` }
       const summary = `Add hours for ${w.name} at ${site(j)}\non ${dayLabel(t.start!)}, ${span(t.start!, t.end!)}`
-      proposals.push({ summary, token: seal({ kind: 'add_shift', workerId: w.id, jobId: j.id, start: t.start!, end: t.end! }) })
+      proposals.push({ summary, token: seal(supabase.businessId, { kind: 'add_shift', workerId: w.id, jobId: j.id, start: t.start!, end: t.end! }) })
       return { shown_to_owner: summary, note: 'Not added yet. The owner must press Confirm.' }
     }
 
@@ -320,7 +320,7 @@ async function runTool(supabase: Supabase, name: string, input: Input, proposals
       const summary =
         `Move the ${x.supplier ?? 'unknown supplier'} invoice ($${Number(x.amount_ex_gst).toFixed(2)} ex GST, ${fmtDate(x.expense_date)})\n` +
         `from ${from ? site(from) : 'no job'}\nto ${target ? site(target) : 'no job (back to Needs checking)'}`
-      proposals.push({ summary, token: seal({ kind: 'move_invoice', invoiceId: x.id, jobId: input.job_id ?? null }) })
+      proposals.push({ summary, token: seal(supabase.businessId, { kind: 'move_invoice', invoiceId: x.id, jobId: input.job_id ?? null }) })
       return { shown_to_owner: summary, note: 'Not moved yet. The owner must press Confirm.' }
     }
   }
@@ -329,8 +329,7 @@ async function runTool(supabase: Supabase, name: string, input: Input, proposals
 
 // ---------- Applying a confirmed change ----------
 
-export async function applyChange(change: Change): Promise<string> {
-  const supabase = createServiceClient()
+export async function applyChange(supabase: BusinessDb, change: Change): Promise<string> {
   if (change.kind === 'change_shift') {
     const { error } = await supabase
       .from('time_entries')
@@ -402,8 +401,7 @@ const STATUS: Record<string, string> = {
 }
 
 // Runs the conversation and reports progress through emit: status lines, the answer word by word, and any change cards.
-export async function streamAssistant(history: ChatMessage[], emit: (e: AssistantEvent) => void) {
-  const supabase = createServiceClient()
+export async function streamAssistant(supabase: BusinessDb, history: ChatMessage[], emit: (e: AssistantEvent) => void) {
   const proposals: Proposal[] = []
   const messages: Anthropic.Messages.MessageParam[] = history
     .filter((m) => m.text.trim())
@@ -477,10 +475,10 @@ export async function streamAssistant(history: ChatMessage[], emit: (e: Assistan
 }
 
 // The whole answer at once (used by tests)
-export async function askAssistant(history: ChatMessage[]) {
+export async function askAssistant(db: BusinessDb, history: ChatMessage[]) {
   let text = ''
   const proposals: Proposal[] = []
-  await streamAssistant(history, (e) => {
+  await streamAssistant(db, history, (e) => {
     if (e.type === 'text') text += e.text
     if (e.type === 'proposal') proposals.push(e.proposal)
   })

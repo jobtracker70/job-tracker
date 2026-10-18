@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
+import { getDb } from '@/lib/db'
 import { loadJob } from '@/lib/job-data'
 import { jobTitle } from '@/lib/status'
 import { fmtDate, hrs, money, moneyCents } from '@/lib/format'
@@ -12,7 +13,8 @@ export const dynamic = 'force-dynamic'
 
 export default async function JobInvoicesPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
-  const data = await loadJob(id)
+  const { db } = await getDb()
+  const data = await loadJob(db, id)
   if (!data) notFound()
   const { j, expenses } = data
 

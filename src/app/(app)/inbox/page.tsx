@@ -1,6 +1,6 @@
 import Link from 'next/link'
-import { createServiceClient } from '@/lib/supabase'
-import { emailConfigured } from '@/lib/email'
+import { getDb } from '@/lib/db'
+import { emailBusinessId, emailConfigured } from '@/lib/email'
 import { fmtDate, fmtDateTime, moneyCents as money } from '@/lib/format'
 import { SmallTag, buttonClass, cardClass, inputClass, secondaryButtonClass } from '@/components/ui'
 import { approveExpense, rejectExpense } from './actions'
@@ -29,17 +29,17 @@ function reason(x: Expense) {
 }
 
 export default async function InboxPage() {
-  const supabase = createServiceClient()
+  const { db } = await getDb()
   const [{ data: pendingData }, { data: recentData }, { data: jobs }, { data: subbies }, { data: lastEmail }] = await Promise.all([
-    supabase.from('expenses').select('*, jobs(code, address)').eq('status', 'pending').order('created_at', { ascending: false }),
-    supabase.from('expenses').select('*, jobs(code, address)').neq('status', 'pending').order('created_at', { ascending: false }).limit(60),
-    supabase.from('jobs').select('id, code, client_name, address, status').eq('status', 'active').order('created_at', { ascending: false }),
-    supabase.from('workers').select('id, name').in('type', ['subbie', 'subbie_fixed']).eq('active', true).order('name'),
-    supabase.from('processed_emails').select('processed_at').order('processed_at', { ascending: false }).limit(1).maybeSingle(),
+    db.from('expenses').select('*, jobs(code, address)').eq('status', 'pending').order('created_at', { ascending: false }),
+    db.from('expenses').select('*, jobs(code, address)').neq('status', 'pending').order('created_at', { ascending: false }).limit(60),
+    db.from('jobs').select('id, code, client_name, address, status').eq('status', 'active').order('created_at', { ascending: false }),
+    db.from('workers').select('id, name').in('type', ['subbie', 'subbie_fixed']).eq('active', true).order('name'),
+    db.raw.from('processed_emails').select('processed_at').order('processed_at', { ascending: false }).limit(1).maybeSingle(),
   ])
   const pending = (pendingData ?? []) as Expense[]
   const recent = (recentData ?? []) as Expense[]
-  const connected = emailConfigured()
+  const connected = emailConfigured() && db.businessId === emailBusinessId()
 
   // Recently added, grouped by job (newest job activity first)
   const groups = new Map<string, { key: string; jobId: string | null; label: string; items: Expense[]; total: number }>()
@@ -54,7 +54,7 @@ export default async function InboxPage() {
   const fileUrls = new Map<string, string>()
   const paths = pending.map((x) => x.image_path).filter((p): p is string => !!p)
   if (paths.length) {
-    const { data } = await supabase.storage.from('invoices').createSignedUrls(paths, 3600)
+    const { data } = await db.storage.from('invoices').createSignedUrls(paths, 3600)
     for (const d of data ?? []) if (d.path && d.signedUrl) fileUrls.set(d.path, d.signedUrl)
   }
 

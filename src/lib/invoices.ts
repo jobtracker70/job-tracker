@@ -1,4 +1,4 @@
-import { createServiceClient } from './supabase'
+import { businessDb } from './db'
 import { compactCode } from './format'
 import { parseJsonReply, readDocument } from './ai'
 
@@ -104,10 +104,11 @@ export type SavedInvoice = {
 // An exact repeat (same supplier, invoice number and amount) is not saved again: it comes back with duplicate = true.
 export async function processInvoiceFile(
   file: InvoiceFile,
-  opts: { source: 'email' | 'upload' | 'whatsapp'; emailMessageId?: string; hint?: string; jobId?: string; submittedBy?: string },
+  opts: { source: 'email' | 'upload' | 'whatsapp'; businessId: string; emailMessageId?: string; hint?: string; jobId?: string; submittedBy?: string },
 ): Promise<SavedInvoice | null> {
-  const supabase = createServiceClient()
-  const { data: jobRows } = await supabase.from('jobs').select('id, code').neq('status', 'rejected')
+  // Everything here is limited to the business the invoice came in for
+  const db = businessDb(opts.businessId)
+  const { data: jobRows } = await db.from('jobs').select('id, code').neq('status', 'rejected')
   const jobs = (jobRows ?? []) as JobRef[]
 
   const x = await extractInvoice(file, jobs.map((j) => j.code), opts.hint)
@@ -119,7 +120,7 @@ export async function processInvoiceFile(
   const gst = x.gst == null ? null : sign * Math.abs(Number(x.gst))
 
   // Duplicate check: same amount, then same supplier, then same invoice number (or same date if no number)
-  const { data: sameAmount } = await supabase
+  const { data: sameAmount } = await db
     .from('expenses')
     .select('id, status, job_id, supplier, invoice_number, expense_date, total')
     .eq('total', total)
@@ -144,7 +145,7 @@ export async function processInvoiceFile(
   let workerId: string | null = null
   let fixedPrice = false
   if (x.category === 'subbie') {
-    const { data: subbies } = await supabase.from('workers').select('id, name, abn, type').in('type', SUBBIE_TYPES)
+    const { data: subbies } = await db.from('workers').select('id, name, abn, type').in('type', SUBBIE_TYPES)
     const abn = digits(x.supplier_abn)
     const supplier = (x.supplier ?? '').toLowerCase()
     const match = (subbies ?? []).find(
@@ -157,15 +158,15 @@ export async function processInvoiceFile(
     fixedPrice = match?.type === 'subbie_fixed'
   }
 
-  const path = `${Date.now()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`
-  const { error: uploadError } = await supabase.storage.from('invoices').upload(path, file.data, { contentType: file.contentType })
+  const path = `${opts.businessId}/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`
+  const { error: uploadError } = await db.storage.from('invoices').upload(path, file.data, { contentType: file.contentType })
 
   const confident = x.confidence !== 'low'
   // Hourly subbies must show hours so they can be checked against WhatsApp sign-ins; fixed-price subbies don't.
   const subbieOk = x.category !== 'subbie' || (workerId != null && (fixedPrice || x.hours != null))
   const status = jobId && confident && subbieOk && !possibleDuplicate ? 'approved' : 'pending'
 
-  const { data, error } = await supabase
+  const { data, error } = await db
     .from('expenses')
     .insert({
       job_id: jobId,

@@ -15,15 +15,20 @@ export default function LoginPage() {
       <form action={action} className={`${cardClass} w-full max-w-sm p-6 space-y-4`}>
         <h1 className="text-lg font-bold">Log in</h1>
         <label className="block">
+          <span className="text-sm font-medium">Email</span>
+          <input type="email" name="email" required autoFocus autoComplete="email" inputMode="email" className={`${inputClass} mt-1.5`} />
+        </label>
+        <label className="block">
           <span className="text-sm font-medium">Password</span>
-          <input type="password" name="password" required autoFocus autoComplete="current-password" className={`${inputClass} mt-1.5`} />
+          <input type="password" name="password" required autoComplete="current-password" className={`${inputClass} mt-1.5`} />
         </label>
         {error && <p className="text-bad text-sm font-medium">{error}</p>}
         <button type="submit" disabled={pending} className={`${buttonClass} w-full py-3`}>
           {pending ? 'Checking…' : 'Log in'}
         </button>
       </form>
-      <Link href="/privacy" className="text-faint text-sm mt-6 hover:text-ink">Privacy</Link>
+      <p className="text-faint text-sm mt-6">Forgot your password? Ask the person who set up your account.</p>
+      <Link href="/privacy" className="text-faint text-sm mt-2 hover:text-ink">Privacy</Link>
     </main>
   )
 }

@@ -1,6 +1,6 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
-import { createServiceClient } from '@/lib/supabase'
+import { getDb } from '@/lib/db'
 import { fmtDate, fmtDateTime, hrs, moneyCents } from '@/lib/format'
 import { Pill, SmallTag, buttonClass, cardClass, inputClass, secondaryButtonClass } from '@/components/ui'
 import { moveExpense, restoreExpense } from '../actions'
@@ -12,8 +12,8 @@ const SOURCE: Record<string, string> = { email: 'Receipts email', whatsapp: 'Pho
 
 export default async function InvoicePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
-  const supabase = createServiceClient()
-  const { data: x } = await supabase
+  const { db } = await getDb()
+  const { data: x } = await db
     .from('expenses')
     .select('*, jobs(id, code, address), workers!expenses_submitted_by_fkey(name)')
     .eq('id', id)
@@ -22,10 +22,10 @@ export default async function InvoicePage({ params }: { params: Promise<{ id: st
 
   const job = x.jobs as { id: string; code: string; address: string | null } | null
   const sender = (x.workers as { name: string } | null)?.name
-  const { data: activeJobs } = await supabase.from('jobs').select('id, code, address').eq('status', 'active').order('created_at', { ascending: false })
+  const { data: activeJobs } = await db.from('jobs').select('id, code, address').eq('status', 'active').order('created_at', { ascending: false })
   const jobOptions = [...(activeJobs ?? [])]
   if (job && !jobOptions.some((j) => j.id === job.id)) jobOptions.unshift(job)
-  const fileUrl = x.image_path ? (await supabase.storage.from('invoices').createSignedUrl(x.image_path, 3600)).data?.signedUrl : null
+  const fileUrl = x.image_path ? (await db.storage.from('invoices').createSignedUrl(x.image_path, 3600)).data?.signedUrl : null
   const status = x.status === 'pending' ? { tone: 'warn' as const, label: 'Needs checking' } : x.status === 'rejected' ? { tone: 'neutral' as const, label: 'Ignored' } : { tone: 'good' as const, label: 'Added to job' }
 
   return (

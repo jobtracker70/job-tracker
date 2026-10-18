@@ -1,5 +1,6 @@
 import Link from 'next/link'
 import { notFound } from 'next/navigation'
+import { getDb } from '@/lib/db'
 import { isSubbieType, loadJob, peopleOnJob, weekLabel, weekOf } from '@/lib/job-data'
 import { jobTitle } from '@/lib/status'
 import { fmtClock, fmtDate, hrs, money } from '@/lib/format'
@@ -11,7 +12,8 @@ const dayName = (d: string) => new Date(`${d}T00:00:00Z`).toLocaleDateString('en
 
 export default async function PersonOnJobPage({ params }: { params: Promise<{ id: string; workerId: string }> }) {
   const { id, workerId } = await params
-  const data = await loadJob(id)
+  const { db } = await getDb()
+  const data = await loadJob(db, id)
   if (!data) notFound()
   const { j, entries } = data
   const mine = entries.filter((e) => e.worker_id === workerId)

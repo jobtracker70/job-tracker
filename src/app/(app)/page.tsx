@@ -1,5 +1,5 @@
 import Link from 'next/link'
-import { createServiceClient } from '@/lib/supabase'
+import { getDb } from '@/lib/db'
 import { forecast, jobNumbers, type JobSummary } from '@/lib/forecast'
 import { invoicesToCheckCount, shiftsToCheck } from '@/lib/checks'
 import { FINISHED, jobPill, jobSubtitle, jobTitle } from '@/lib/status'
@@ -17,14 +17,14 @@ const TABS = [
 export default async function Home({ searchParams }: { searchParams: Promise<{ tab?: string }> }) {
   const { tab: tabParam } = await searchParams
   const tab = TABS.find((t) => t.key === (tabParam === 'waiting' ? 'quotes' : tabParam)) ?? TABS[0]
-  const supabase = createServiceClient()
+  const { db } = await getDb()
   const tenHoursAgo = new Date(new Date().getTime() - 10 * 3600000).toISOString()
 
   const [{ data: jobsData }, shifts, invoiceCount, { data: longShifts }] = await Promise.all([
-    supabase.from('job_summary').select('*').order('created_at', { ascending: false }),
-    shiftsToCheck(supabase),
-    invoicesToCheckCount(supabase),
-    supabase
+    db.from('job_summary').select('*').order('created_at', { ascending: false }),
+    shiftsToCheck(db),
+    invoicesToCheckCount(db),
+    db
       .from('time_entries')
       .select('id, start_time, workers(name), jobs(address, code)')
       .is('end_time', null)

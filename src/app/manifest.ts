@@ -6,7 +6,7 @@ export default function manifest(): MetadataRoute.Manifest {
     name: 'BrushBooks',
     short_name: 'BrushBooks',
     description: 'Know your profit on every job.',
-    start_url: '/',
+    start_url: '/login',
     display: 'standalone',
     background_color: '#F5F8FC',
     theme_color: '#1D5FD8',

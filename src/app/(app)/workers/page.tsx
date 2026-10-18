@@ -1,4 +1,4 @@
-import { createServiceClient } from '@/lib/supabase'
+import { getDb } from '@/lib/db'
 import { fmtDate, money, todaySydney } from '@/lib/format'
 import { Pill, buttonClass, cardClass, inputClass, secondaryButtonClass } from '@/components/ui'
 import { AddWorkerForm, PayOptions } from './add-worker-form'
@@ -26,7 +26,7 @@ const TYPE_LABEL: Record<string, string> = {
 const initials = (name: string) => name.split(/\s+/).filter(Boolean).slice(0, 2).map((p) => p[0]?.toUpperCase()).join('')
 
 export default async function WorkersPage() {
-  const { data } = await createServiceClient()
+  const { data } = await (await getDb()).db
     .from('workers')
     .select('id, name, phone, type, abn, active, break_minutes, worker_rates(base_rate, oncost_mult, effective_from, weekend_rate, overtime_rate, overtime_after)')
     .order('name')
