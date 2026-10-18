@@ -29,6 +29,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
             <span className="block text-faint truncate">{session.name ?? session.email}</span>
           </p>
           {session.isAdmin && <Link href="/admin" className="block px-3 py-2 text-sm font-semibold text-brand hover:text-brand-dark">Admin</Link>}
+          <Link href="/account" className="block px-3 py-2 text-sm text-faint hover:text-ink">My account &amp; password</Link>
           <Link href="/privacy" className="block px-3 py-2 text-sm text-faint hover:text-ink">Privacy</Link>
           <form action={logout}>
             <button className="w-full text-left px-3 py-2 text-sm text-faint hover:text-ink">Log out</button>
@@ -60,6 +61,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           <p className="md:hidden print:hidden mt-10 text-center text-sm text-faint">{session.businessName} · {session.name ?? session.email}</p>
           <div className="md:hidden print:hidden mt-2 flex justify-center gap-6 text-sm text-faint">
             {session.isAdmin && <Link href="/admin" className="text-brand font-semibold">Admin</Link>}
+            <Link href="/account">My account</Link>
             <Link href="/privacy">Privacy</Link>
             <form action={logout}><button>Log out</button></form>
           </div>
