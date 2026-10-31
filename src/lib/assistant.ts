@@ -54,6 +54,12 @@ const TOOLS: Anthropic.Messages.Tool[] = [
     },
   },
   {
+    name: 'get_job_details',
+    description:
+      'Everything about ONE job: the quote (price, quoted hours, quoted labour $, quoted materials, client, PO), each variation/extra (what it was, price, hours, materials, date), and the money so far split into labour, subbies and materials. Use for any question about a specific job, its quote or its variations. Get the job id from list_jobs.',
+    input_schema: { type: 'object', properties: { job_id: { type: 'string' } }, required: ['job_id'] },
+  },
+  {
     name: 'list_workers',
     description: 'All workers (employees, apprentices, subbies) with their ids, type, current pay rate and whether they are working now.',
     input_schema: { type: 'object', properties: {} },
@@ -157,7 +163,7 @@ async function runTool(supabase: Supabase, name: string, input: Input, proposals
           return {
             id: j.id, code: j.code, address: j.address, client: j.client_name, status: jobPill(j, f).label,
             start_date: j.start_date, planned_finish: j.planned_finish,
-            income_ex_gst: r2(nums.income), costs_so_far: r2(nums.costs), profit_so_far: r2(nums.profit),
+            quote_ex_gst: j.quote_total, variations_ex_gst: r2(Number(j.variations_total ?? 0)), income_ex_gst: r2(nums.income), costs_so_far: r2(nums.costs), profit_so_far: r2(nums.profit),
             margin_pct: nums.margin == null ? null : Math.round(nums.margin * 100),
             hours_used: r2(nums.hoursUsed), hours_budget: nums.hoursBudget, labour_cost: r2(nums.labourCost),
             materials_cost: r2(nums.materialsCost), materials_budget: nums.materialsBudget,
@@ -165,6 +171,33 @@ async function runTool(supabase: Supabase, name: string, input: Input, proposals
             shifts_to_check: j.entries_to_review, rejection_reason: j.rejection_reason,
           }
         })
+    }
+
+    case 'get_job_details': {
+      const [{ data: sum }, { data: job }, { data: vars }] = await Promise.all([
+        supabase.from('job_summary').select('*').eq('id', input.job_id ?? '').maybeSingle(),
+        supabase.from('jobs').select('po_ref, quoted_labour').eq('id', input.job_id ?? '').maybeSingle(),
+        supabase.from('variations').select('description, amount, hours, materials, created_at, quote_pdf_path').eq('job_id', input.job_id ?? '').order('created_at'),
+      ])
+      if (!sum) return { error: 'No job with that id. Use list_jobs to find it.' }
+      const j = sum as JobSummary
+      const nums = jobNumbers(j)
+      const varList = (vars ?? []) as { description: string | null; amount: number | null; hours: number | null; materials: number | null; created_at: string; quote_pdf_path: string | null }[]
+      return {
+        code: j.code, address: j.address, client: j.client_name, status: j.status, po_ref: job?.po_ref ?? null,
+        quote: { price_ex_gst: j.quote_total, quoted_hours: j.quoted_hours, quoted_labour: job?.quoted_labour ?? null, quoted_materials: j.quoted_materials },
+        variations: varList.map((v) => ({
+          what: v.description, price_ex_gst: v.amount, hours: v.hours, materials: v.materials,
+          added: fmtDate(sydneyDateOf(v.created_at)), has_quote_pdf: !!v.quote_pdf_path,
+        })),
+        variations_total_ex_gst: r2(varList.reduce((s, v) => s + Number(v.amount ?? 0), 0)),
+        money_so_far: {
+          income_ex_gst: r2(nums.income), employee_labour: r2(Number(j.labour_cost ?? 0)), subbies: r2(Number(j.subbie_cost ?? 0)),
+          materials: r2(nums.materialsCost), total_costs: r2(nums.costs), profit: r2(nums.profit),
+          margin_pct: nums.margin == null ? null : Math.round(nums.margin * 100),
+        },
+        hours: { used: r2(nums.hoursUsed), budget: nums.hoursBudget },
+      }
     }
 
     case 'list_workers': {
@@ -372,8 +405,9 @@ function systemPrompt(snapshot = '') {
 Today is ${weekday} ${today} (Sydney time). Times are Sydney time. Weeks run Monday to Sunday.
 
 Rules:
+- Answer the question directly with the actual numbers. Look them up yourself with the tools (e.g. get_job_details for a job's quote, variations or costs); never tell the owner to go and check a page for something the tools can give you.
 - Use the tools to look things up. Never guess or invent numbers, names or dates. If the data doesn't have it, say so.
-- Only quote numbers that appear in the data. Don't work out budgets, rates or totals that aren't there (e.g. there is no labour-dollar budget, only hours_budget and materials_budget). "Over budget" means hours_used > hours_budget or materials_cost > materials_budget; say which.
+- Only quote numbers that appear in the data. Don't work out budgets, rates or totals that aren't there (the budgets are the quoted hours, quoted labour $ and quoted materials). "Over budget" means hours_used > hours_budget or materials_cost > materials_budget; say which.
 - Money is ex GST unless you say otherwise. Hours are paid hours (unpaid breaks taken off).
 - Keep answers SHORT: 1–4 lines, like a text message from a bookkeeper. Give the key numbers only; skip extra detail unless the owner asks for it. Answer plain, Australian English. Use numbers. Mention the dates or jobs your answer covers so the owner can check it. No markdown headings; short lists are fine.
 - If a name or job is ambiguous (e.g. two people called Sam, or "the Dulux invoice" matches several), ask which one before doing anything.
@@ -395,6 +429,7 @@ const STATUS: Record<string, string> = {
   who_is_on_site: "Checking who's on site…",
   list_jobs: 'Checking jobs…',
   list_workers: 'Checking workers…',
+  get_job_details: 'Checking the job…',
   propose_change_shift: 'Preparing the change…',
   propose_add_shift: 'Preparing the change…',
   propose_move_invoice: 'Preparing the change…',
