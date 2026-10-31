@@ -14,5 +14,5 @@ export function proxy(req: NextRequest) {
 // WhatsApp and the scheduled jobs are called by outside services and check their own secrets.
 // The website (/welcome), its screenshots and /privacy are public.
 export const config = {
-  matcher: ['/((?!api/whatsapp|api/cron|privacy|welcome|screens|manifest.webmanifest|icon|apple-icon|_next/static|_next/image|favicon.ico).*)'],
+  matcher: ['/((?!api/whatsapp|api/cron|privacy|welcome|screens|sw.js|manifest.webmanifest|icon|apple-icon|_next/static|_next/image|favicon.ico).*)'],
 }

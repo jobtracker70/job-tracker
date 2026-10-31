@@ -149,7 +149,7 @@ export default async function HoursPage({ searchParams }: { searchParams: Promis
                   <form action={markReviewed.bind(null, c.id, back)}><button className={buttonClass}>Looks right</button></form>
                   <span className={`${secondaryButtonClass} cursor-pointer`}>Fix time</span>
                 </summary>
-                <form action={updateEntry.bind(null, c.id)} className="mt-4 pt-4 border-t border-line space-y-3">
+                <form key={`${c.start}|${c.end}`} action={updateEntry.bind(null, c.id)} className="mt-4 pt-4 border-t border-line space-y-3">
                   <input type="hidden" name="back" value={back} />
                   <input type="hidden" name="job_id" value={c.jobId} />
                   <ShiftTimes defaultStart={toSydneyLocalInput(c.start)} defaultEnd={toSydneyLocalInput(c.end)} today={today} allowOpen={!c.end} {...usual(jobById.get(c.jobId))} />
@@ -220,7 +220,7 @@ function ShiftRow({ e, jobs, job, back, today }: { e: Entry; jobs: Job[]; job: J
       </summary>
       <div className="px-4 pb-4 space-y-3">
         {e.review_reason && <p className="text-sm text-muted">{e.review_reason}</p>}
-        <form action={updateEntry.bind(null, e.id)} className="space-y-3 max-w-md">
+        <form key={`${e.start_time}|${e.end_time}|${e.job_id}`} action={updateEntry.bind(null, e.id)} className="space-y-3 max-w-md">
           <input type="hidden" name="back" value={back} />
           <label className="block"><span className="text-sm font-medium">Job</span>
             <select name="job_id" defaultValue={e.job_id} className={`${inputClass} mt-1.5`}>

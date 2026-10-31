@@ -131,6 +131,18 @@ export async function kimiChatStream(
   return { role: 'assistant', content, ...(toolCalls.length ? { tool_calls: toolCalls } : {}) }
 }
 
+// All the text in a PDF, every page (empty for scanned PDFs that are only pictures)
+export async function pdfText(data: Buffer) {
+  try {
+    const { extractText, getDocumentProxy } = await import('unpdf')
+    const pdf = await getDocumentProxy(new Uint8Array(data))
+    const { text } = await extractText(pdf, { mergePages: true })
+    return (Array.isArray(text) ? text.join('\n') : text).trim()
+  } catch {
+    return ''
+  }
+}
+
 // Kimi reads PDFs by uploading them and getting the text back
 async function kimiPdfText(file: AiFile) {
   const form = new FormData()
@@ -160,7 +172,8 @@ export async function readDocument(task: AiTask, file: AiFile, prompt: string, m
       })
       return typeof msg?.content === 'string' ? msg.content : ''
     }
-    const text = isPdf(file) ? await kimiPdfText(file) : file.data.toString('utf8')
+    // Read every page ourselves; only scanned PDFs (no text layer) go to Kimi's own reader
+    const text = isPdf(file) ? (await pdfText(file.data)) || (await kimiPdfText(file)) : file.data.toString('utf8')
     const msg = await kimiChat({
       maxTokens,
       messages: [{ role: 'user', content: `Document "${file.name}":\n${text.slice(0, 60000)}\n\n${prompt}` }],

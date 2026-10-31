@@ -4,6 +4,8 @@ import { revalidatePath } from 'next/cache'
 import { getDb } from '@/lib/db'
 import { redirect } from 'next/navigation'
 import { addWorkingDays, cleanJobCode, num, text } from '@/lib/format'
+import { readQuote } from '@/lib/quotes'
+import { isOutOfCredit } from '@/lib/ai'
 
 function done(jobId: string) {
   revalidatePath(`/jobs/${jobId}`)
@@ -60,6 +62,7 @@ export async function updateJob(jobId: string, formData: FormData) {
       address: text(formData.get('address')),
       quote_total: num(formData.get('quote_total')),
       quoted_hours: num(formData.get('quoted_hours')),
+      quoted_labour: num(formData.get('quoted_labour')),
       quoted_materials: num(formData.get('quoted_materials')),
       start_date: text(formData.get('start_date')),
       planned_finish: text(formData.get('planned_finish')),
@@ -89,4 +92,43 @@ export async function addVariation(jobId: string, formData: FormData) {
 export async function deleteVariation(jobId: string, variationId: string) {
   await (await getDb()).db.from('variations').delete().eq('id', variationId).eq('job_id', jobId)
   done(jobId)
+}
+
+// Delete a quote that never went ahead (only quotes and lost quotes, so no hours or invoices are lost)
+export async function deleteQuote(jobId: string) {
+  const { db } = await getDb()
+  const { data: job } = await db.from('jobs').select('status, quote_pdf_path').eq('id', jobId).maybeSingle()
+  if (!job || !['quoted', 'rejected'].includes(job.status)) return
+  if (job.quote_pdf_path) await db.storage.from('quotes').remove([job.quote_pdf_path])
+  await db.from('jobs').delete().eq('id', jobId)
+  revalidatePath('/')
+  redirect('/?tab=quotes')
+}
+
+// A variation (extra work) from its own quote PDF: the AI reads the price, hours and materials
+export async function uploadVariation(jobId: string, _prev: string | null, formData: FormData) {
+  const { db } = await getDb()
+  if (!(await db.owns('jobs', jobId))) return 'Job not found'
+  const file = formData.get('pdf') as File | null
+  if (!file || file.size === 0) return 'Choose the variation quote PDF'
+  const bytes = Buffer.from(await file.arrayBuffer())
+  let q
+  try {
+    q = await readQuote({ name: file.name, contentType: 'application/pdf', data: bytes })
+  } catch (e) {
+    return isOutOfCredit(e) ? "The AI account has run out of credit, so the quote couldn't be read." : "Couldn't read that PDF. Add the extra by hand below."
+  }
+  if (q.quote_total == null) return "Couldn't find a price in that PDF. Add the extra by hand below."
+  const path = `${db.businessId}/variations/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`
+  const { error: upErr } = await db.storage.from('quotes').upload(path, bytes, { contentType: 'application/pdf' })
+  await db.from('variations').insert({
+    job_id: jobId,
+    description: text(formData.get('description')) ?? q.description ?? file.name.replace(/\.pdf$/i, ''),
+    amount: q.quote_total,
+    hours: q.quoted_hours ?? 0,
+    materials: q.quoted_materials ?? 0,
+    quote_pdf_path: upErr ? null : path,
+  })
+  done(jobId)
+  return `✓ Added: ${q.quote_total.toLocaleString('en-AU', { style: 'currency', currency: 'AUD' })} ex GST${q.quoted_hours ? `, ${q.quoted_hours}h` : ''}. Check the hours and materials below.`
 }

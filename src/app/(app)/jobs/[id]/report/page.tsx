@@ -7,6 +7,7 @@ import { fmtQty, itemsOf, totalItems } from '@/lib/items'
 import { cardClass } from '@/components/ui'
 import { jobSubtitle, jobTitle } from '@/lib/status'
 import { PrintButton } from './print-button'
+import { CostPie } from '@/components/cost-pie'
 
 export const dynamic = 'force-dynamic'
 
@@ -198,6 +199,11 @@ export default async function JobReportPage({ params }: { params: Promise<{ id: 
           sub={expectedMargin != null ? `${Math.round(expectedMargin * 100)}% if run to quote` : undefined}
         />
       </div>
+
+      {/* Where the money went */}
+      <Section title="Where the money went">
+        <CostPie labour={employeeCost} subbies={subbieCost} materials={nums.materialsCost} income={income} />
+      </Section>
 
       {/* Findings */}
       <Section title="What happened on this job">

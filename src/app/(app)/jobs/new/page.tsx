@@ -19,6 +19,7 @@ export default function NewJobPage() {
     null,
   )
   const [fileName, setFileName] = useState<string | null>(null)
+  const [over, setOver] = useState(false)
 
   return (
     <div className="max-w-xl mx-auto space-y-6">
@@ -28,17 +29,23 @@ export default function NewJobPage() {
       </div>
 
       <form action={action} className="space-y-5">
-        <label className={`${cardClass} block border-2 border-dashed !border-brand/30 hover:!border-brand p-10 text-center cursor-pointer transition`}>
+        {/* The file box covers the whole area, so a PDF can be dropped anywhere on it or tapped to choose */}
+        <label
+          onDragOver={(e) => { e.preventDefault(); setOver(true) }}
+          onDragLeave={() => setOver(false)}
+          onDrop={() => setOver(false)}
+          className={`${cardClass} relative block border-2 border-dashed p-10 text-center cursor-pointer transition ${over ? '!border-brand bg-brand-tint' : '!border-brand/30 hover:!border-brand'}`}
+        >
           <input
             type="file"
             name="pdf"
             accept="application/pdf"
             required
-            className="sr-only"
+            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
             onChange={(e) => setFileName(e.target.files?.[0]?.name ?? null)}
           />
           <span className="text-4xl block mb-3">📄</span>
-          <span className="block font-semibold text-lg">{fileName ?? 'Tap to choose your quote PDF'}</span>
+          <span className="block font-semibold text-lg">{fileName ?? (over ? 'Drop it here' : 'Drag your quote PDF here, or tap to choose')}</span>
           <span className="block text-muted text-sm mt-1">{fileName ? 'Tap to choose a different file' : 'The same PDF you sent to the client'}</span>
         </label>
 

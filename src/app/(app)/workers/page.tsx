@@ -3,12 +3,13 @@ import { fmtDate, money, todaySydney } from '@/lib/format'
 import { Pill, buttonClass, cardClass, inputClass, secondaryButtonClass } from '@/components/ui'
 import { AddWorkerForm, PayOptions } from './add-worker-form'
 import { WORKER_TYPES } from '@/lib/workers'
-import { setActive, setRate, updateWorker } from './actions'
+import { removeWorker, setActive, setRate, updateWorker } from './actions'
+import { ConfirmButton } from '@/components/confirm-button'
 
 export const dynamic = 'force-dynamic'
 
 type Rate = {
-  base_rate: number; oncost_mult: number; effective_from: string
+  base_rate: number; oncost_mult: number; effective_from: string; created_at?: string
   weekend_rate: number | null; overtime_rate: number | null; overtime_after: number
 }
 type Worker = {
@@ -25,10 +26,12 @@ const TYPE_LABEL: Record<string, string> = {
 
 const initials = (name: string) => name.split(/\s+/).filter(Boolean).slice(0, 2).map((p) => p[0]?.toUpperCase()).join('')
 
-export default async function WorkersPage() {
+export default async function WorkersPage({ searchParams }: { searchParams: Promise<{ error?: string }> }) {
+  const { error } = await searchParams
   const { data } = await (await getDb()).db
     .from('workers')
-    .select('id, name, phone, type, abn, active, break_minutes, worker_rates(base_rate, oncost_mult, effective_from, weekend_rate, overtime_rate, overtime_after)')
+    .select('id, name, phone, type, abn, active, break_minutes, worker_rates(base_rate, oncost_mult, effective_from, weekend_rate, overtime_rate, overtime_after, created_at)')
+    .is('removed_at', null)
     .order('name')
   const workers = (data ?? []) as Worker[]
   const today = todaySydney()
@@ -47,6 +50,7 @@ export default async function WorkersPage() {
         </details>
       </div>
 
+      {error && <div className="bg-bad-tint border border-bad/20 text-bad rounded-2xl px-4 py-3 font-medium">⚠ {error}</div>}
       <Group title="Active" workers={active} today={today} />
       {inactive.length > 0 && <Group title="Not working now" workers={inactive} today={today} />}
       {!workers.length && <div className={`${cardClass} p-8 text-center text-muted`}>No workers yet. Add your crew so they can sign in on WhatsApp.</div>}
@@ -67,7 +71,8 @@ function Group({ title, workers, today }: { title: string; workers: Worker[]; to
 }
 
 function WorkerRow({ w, today }: { w: Worker; today: string }) {
-  const rates = [...w.worker_rates].sort((a, b) => b.effective_from.localeCompare(a.effective_from))
+  // Newest first; if two rates start the same day, the later change wins
+  const rates = [...w.worker_rates].sort((a, b) => b.effective_from.localeCompare(a.effective_from) || (b.created_at ?? '').localeCompare(a.created_at ?? ''))
   const current = rates.find((r) => r.effective_from <= today) ?? null
   const subbie = w.type === 'subbie' || w.type === 'subbie_fixed'
   const rateText = w.type === 'subbie_fixed' ? 'Fixed price' : current ? `${money(Number(current.base_rate))}/h` : 'No rate'
@@ -86,7 +91,7 @@ function WorkerRow({ w, today }: { w: Worker; today: string }) {
 
       <div className="px-4 pb-5 grid md:grid-cols-2 gap-6">
         {w.type !== 'subbie_fixed' ? (
-          <form action={setRate.bind(null, w.id, w.type)} className="space-y-3">
+          <form key={`${current?.base_rate}|${current?.effective_from}|${current?.weekend_rate}|${current?.overtime_rate}`} action={setRate.bind(null, w.id, w.type)} className="space-y-3">
             <h3 className="font-semibold">Pay</h3>
             <div className="grid grid-cols-2 gap-3">
               <label className="block"><span className="text-sm font-medium">{subbie ? 'Hourly rate ($)' : 'Pay rate ($/h)'}</span>
@@ -117,7 +122,7 @@ function WorkerRow({ w, today }: { w: Worker; today: string }) {
           <p className="text-sm text-muted">Fixed-price subbies have no hourly rate. Their cost comes from their invoices.</p>
         )}
 
-        <form action={updateWorker.bind(null, w.id)} className="space-y-3">
+        <form key={`${w.name}|${w.phone}|${w.type}|${w.break_minutes}|${w.abn}|${w.active}`} action={updateWorker.bind(null, w.id)} className="space-y-3">
           <h3 className="font-semibold">Details</h3>
           <input name="name" defaultValue={w.name} className={inputClass} />
           <input name="phone" defaultValue={w.phone} inputMode="tel" className={inputClass} />
@@ -138,6 +143,15 @@ function WorkerRow({ w, today }: { w: Worker; today: string }) {
           </div>
           {w.active ? null : <Pill tone="neutral">Not working now</Pill>}
         </form>
+        {!w.active && (
+          <form action={removeWorker.bind(null, w.id)} className="md:col-span-2">
+            <ConfirmButton
+              label="Remove from BrushBooks"
+              question={`Remove ${w.name}? Their past hours stay on your jobs, and their number (${w.phone}) is freed so it can be added again.`}
+              confirmLabel="Yes, remove"
+            />
+          </form>
+        )}
       </div>
     </details>
   )

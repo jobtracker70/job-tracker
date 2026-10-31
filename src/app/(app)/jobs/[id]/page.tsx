@@ -9,7 +9,8 @@ import {
   buttonClass, cardClass, dangerButtonClass, inputClass, secondaryButtonClass,
 } from '@/components/ui'
 import { ConfirmButton } from '@/components/confirm-button'
-import { acceptQuote, addVariation, deleteVariation, rejectQuote, setJobStatus, updateJob } from './actions'
+import { acceptQuote, addVariation, deleteQuote, deleteVariation, rejectQuote, setJobStatus, updateJob } from './actions'
+import { VariationUpload } from './variation-upload'
 
 export const dynamic = 'force-dynamic'
 
@@ -26,6 +27,12 @@ export default async function JobPage({ params, searchParams }: { params: Promis
     ? (await db.storage.from('quotes').createSignedUrl(job.quote_pdf_path, 3600)).data?.signedUrl
     : null
   const finished = FINISHED.includes(j.status)
+  const variationUrls = new Map<string, string>()
+  const vPaths = variations.map((v) => v.quote_pdf_path).filter((p): p is string => !!p)
+  if (vPaths.length) {
+    const { data: signed } = await db.storage.from('quotes').createSignedUrls(vPaths, 3600)
+    for (const d of signed ?? []) if (d.path && d.signedUrl) variationUrls.set(d.path, d.signedUrl)
+  }
 
   const peopleRows = peopleOnJob(entries)
   const people = peopleRows.length
@@ -35,12 +42,14 @@ export default async function JobPage({ params, searchParams }: { params: Promis
   const subbieMismatch = subbieRows.some((r) => !r.fixed && r.invoiced > 0 && Math.abs(r.invoiced - r.logged) >= 0.5)
 
   const editForm = (
-    <form action={updateJob.bind(null, id)} className="grid sm:grid-cols-2 gap-3">
+    // The key makes the form reload with the saved values after each save
+    <form key={[j.code, j.client_name, j.address, j.quote_total, j.quoted_hours, job.quoted_labour, j.quoted_materials, j.start_date, j.planned_finish, job.day_start, job.day_end].join('|')} action={updateJob.bind(null, id)} className="grid sm:grid-cols-2 gap-3">
       <Field label="Job code" name="code" defaultValue={j.code} />
       <Field label="Client" name="client_name" defaultValue={j.client_name} />
       <div className="sm:col-span-2"><Field label="Address" name="address" defaultValue={j.address} /></div>
       <Field label="Quote total ($ ex GST)" name="quote_total" defaultValue={j.quote_total} />
       <Field label="Quoted labour hours" name="quoted_hours" defaultValue={j.quoted_hours} />
+      <Field label="Quoted labour ($ ex GST)" name="quoted_labour" defaultValue={job.quoted_labour} />
       <Field label="Quoted materials ($ ex GST)" name="quoted_materials" defaultValue={j.quoted_materials} />
       <div />
       <Field label="Start date" name="start_date" type="date" defaultValue={j.start_date} />
@@ -72,6 +81,11 @@ export default async function JobPage({ params, searchParams }: { params: Promis
 
       {codeError && (
         <AlertBar>{codeError === 'used' ? 'That job code is already used by another job. Nothing was saved.' : 'Job codes are 2–24 letters, numbers or dashes. Nothing was saved.'}</AlertBar>
+      )}
+      {j.status !== 'rejected' && j.quoted_hours == null && job.quoted_labour == null && (
+        <AlertBar tone="warn">
+          This quote doesn&apos;t say how much is labour and materials. Add your estimate under <strong>Edit job details</strong> so BrushBooks can track it.
+        </AlertBar>
       )}
       {j.entries_to_review > 0 && (
         <AlertBar action={<Link href={`/hours?job=${id}`} className="bg-white rounded-xl px-3 py-1.5 text-sm font-semibold">Fix hours →</Link>}>
@@ -113,6 +127,13 @@ export default async function JobPage({ params, searchParams }: { params: Promis
           <div className={cardClass}>
             <Collapsible title="Edit job details" summary="Code, client, address, quoted hours and materials">{editForm}</Collapsible>
           </div>
+          <form action={deleteQuote.bind(null, id)} className="pt-2">
+            <ConfirmButton
+              label="Delete this quote"
+              question={`Delete the quote for ${jobTitle(j)}? The quote and its PDF are removed for good.`}
+              confirmLabel="Yes, delete quote"
+            />
+          </form>
         </>
       ) : (
         <div className="grid md:grid-cols-2 gap-5 items-start">
@@ -124,9 +145,20 @@ export default async function JobPage({ params, searchParams }: { params: Promis
                 <Money label={finished ? 'Costs' : 'Costs so far'} value={nums.costs} />
                 <Money label="Profit" value={nums.profit} tone={nums.profit >= 0 ? 'good' : 'bad'} />
               </div>
-              <p className="text-sm text-muted mt-4 pt-4 border-t border-line">
+              <dl className="grid grid-cols-3 gap-3 mt-4 pt-4 border-t border-line text-sm">
+                <div><dt className="text-muted">Labour</dt><dd className="font-semibold">{money(Number(j.labour_cost))}</dd></div>
+                <div><dt className="text-muted">Subbies</dt><dd className="font-semibold">{money(Number(j.subbie_cost))}</dd></div>
+                <div><dt className="text-muted">Materials</dt><dd className="font-semibold">{money(nums.materialsCost)}</dd></div>
+              </dl>
+              <p className="text-sm text-muted mt-3 pt-3 border-t border-line">
                 Margin <strong className="text-ink">{nums.margin == null ? '—' : `${Math.round(nums.margin * 100)}%`}</strong>
                 {!finished && ' so far'} · all ex GST
+              </p>
+              <p className="text-xs text-faint mt-1">
+                Quoted: {money(nums.income)}
+                {job.quoted_labour != null && ` · labour ${money(Number(job.quoted_labour))}`}
+                {j.quoted_hours != null && ` (${hrs(Number(j.quoted_hours))})`}
+                {j.quoted_materials != null && ` · materials ${money(Number(j.quoted_materials))}`}
               </p>
             </div>
 
@@ -134,7 +166,10 @@ export default async function JobPage({ params, searchParams }: { params: Promis
 
             <div className={`${cardClass} p-5 space-y-4`}>
               <ProgressBar label="Hours" used={nums.hoursUsed} budget={nums.hoursBudget} format={hrs} />
-              <ProgressBar label="Materials" used={nums.materialsCost} budget={nums.materialsBudget} format={money} />
+              {job.quoted_labour != null && (
+                <ProgressBar label="Labour cost so far" used={nums.labourCost} budget={Number(job.quoted_labour)} format={money} />
+              )}
+              <ProgressBar label="Materials cost so far" used={nums.materialsCost} budget={nums.materialsBudget} format={money} />
             </div>
 
             <div className="grid grid-cols-2 gap-3">
@@ -149,6 +184,11 @@ export default async function JobPage({ params, searchParams }: { params: Promis
                 <form action={setJobStatus.bind(null, id, 'quoted')}><button className={`${secondaryButtonClass} w-full`}>Move back to quotes</button></form>
               )}
             </div>
+            {j.status === 'rejected' && (
+              <form action={deleteQuote.bind(null, id)}>
+                <ConfirmButton label="Delete this quote" question={`Delete the lost quote for ${jobTitle(j)}? It's removed for good.`} confirmLabel="Yes, delete quote" />
+              </form>
+            )}
           </div>
 
           {/* Right: details on tap */}
@@ -262,6 +302,9 @@ export default async function JobPage({ params, searchParams }: { params: Promis
                       <span className="min-w-0">
                         <span className="font-semibold">{v.description}</span>
                         <span className="block text-muted">+{money(Number(v.amount))} · +{hrs(Number(v.hours))} · +{money(Number(v.materials))} materials</span>
+                        {v.quote_pdf_path && variationUrls.get(v.quote_pdf_path) && (
+                          <a href={variationUrls.get(v.quote_pdf_path)} target="_blank" className="text-brand text-xs font-semibold">Open variation quote</a>
+                        )}
                       </span>
                       <form action={deleteVariation.bind(null, id, v.id)}>
                         <ConfirmButton label="Remove" question={`Remove "${v.description}"?`} confirmLabel="Yes, remove" className="text-faint hover:text-bad text-sm" />
@@ -270,6 +313,8 @@ export default async function JobPage({ params, searchParams }: { params: Promis
                   ))}
                 </ul>
               )}
+              <VariationUpload jobId={id} />
+              <p className="text-xs text-faint mb-2">Or add it by hand:</p>
               <form action={addVariation.bind(null, id)} className="grid grid-cols-3 gap-2">
                 <input name="description" required placeholder="What extra work? e.g. Paint extra bedroom" className={`${inputClass} col-span-3`} />
                 <input name="amount" inputMode="decimal" placeholder="Charge $" className={inputClass} />

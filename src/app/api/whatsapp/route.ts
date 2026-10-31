@@ -110,19 +110,47 @@ async function processMessage(from: string, input: Input) {
   const phone = from.startsWith('+') ? from : `+${from}`
   const raw = createServiceClient()
 
-  const { data: worker } = await raw
+  // The same number can belong to workers in more than one business (e.g. a subbie working for two clients)
+  const { data: matches } = await raw
     .from('workers')
-    .select('id, name, active, break_minutes, business_id')
+    .select('id, name, active, break_minutes, business_id, businesses(name)')
     .eq('phone', phone)
-    .maybeSingle()
+    .is('removed_at', null)
+  const all = (matches ?? []) as unknown as (Worker & { active: boolean; businesses: { name: string } | null })[]
+  const live = all.filter((w) => w.active)
 
-  if (!worker) {
+  if (!all.length) {
     await sendText(from, `Hi! Your number isn't registered yet. Ask your boss to add you to the system.`)
     return
   }
-  if (!worker.active) {
+  if (!live.length) {
     await sendText(from, `Your account is inactive. Contact your boss.`)
     return
+  }
+
+  let worker = live[0]
+  if (live.length > 1) {
+    // They picked a company from the list
+    if (input.kind === 'action' && input.id.startsWith('biz:')) {
+      const picked = live.find((w) => w.id === input.id.slice(4))
+      if (picked) {
+        await raw.from('phone_choice').upsert({ phone, worker_id: picked.id, chosen_at: new Date().toISOString() })
+        return sendMenu(businessDb(picked.business_id), from, picked)
+      }
+    }
+    const { data: choice } = await raw.from('phone_choice').select('worker_id, chosen_at').eq('phone', phone).maybeSingle()
+    const chosenToday = choice && choice.chosen_at >= (sydneyTimeOn(todaySydney(), 0) ?? '') ? live.find((w) => w.id === choice.worker_id) : undefined
+    const wantsSwitch = input.kind === 'text' && ['company', 'switch company', 'change company'].includes(input.value.toLowerCase())
+    if (!chosenToday || wantsSwitch) {
+      await sendList(
+        from,
+        `Hi ${firstName(live[0])}! Which company are you working for today?${input.kind === 'media' ? '\n\n(Then send that receipt again.)' : ''}`,
+        'Choose company',
+        live.map((w) => ({ id: `biz:${w.id}`, title: (w.businesses?.name ?? 'Company').slice(0, 24) })),
+      )
+      return
+    }
+    worker = chosenToday
   }
 
   const supabase = businessDb(worker.business_id)

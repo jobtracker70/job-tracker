@@ -5,6 +5,7 @@ import { BottomNav, SideNav } from '@/components/nav'
 import { Logo, buttonClass } from '@/components/ui'
 import { logout } from '../login/actions'
 import { AskAI } from '@/components/ask-ai'
+import { InstallButton } from '../welcome/install-button'
 import { backToMyBusiness } from './admin/actions'
 
 // The AI assistant can take a few seconds to look things up
@@ -30,6 +31,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           </p>
           {session.isAdmin && <Link href="/admin" className="block px-3 py-2 text-sm font-semibold text-brand hover:text-brand-dark">Admin</Link>}
           <Link href="/account" className="block px-3 py-2 text-sm text-faint hover:text-ink">My account &amp; password</Link>
+          <InstallButton className="block w-full text-left px-3 py-2 text-sm text-faint hover:text-ink" />
           <Link href="/privacy" className="block px-3 py-2 text-sm text-faint hover:text-ink">Privacy</Link>
           <form action={logout}>
             <button className="w-full text-left px-3 py-2 text-sm text-faint hover:text-ink">Log out</button>
@@ -62,6 +64,7 @@ export default async function AppLayout({ children }: { children: React.ReactNod
           <div className="md:hidden print:hidden mt-2 flex justify-center gap-6 text-sm text-faint">
             {session.isAdmin && <Link href="/admin" className="text-brand font-semibold">Admin</Link>}
             <Link href="/account">My account</Link>
+            <InstallButton className="text-faint" />
             <Link href="/privacy">Privacy</Link>
             <form action={logout}><button>Log out</button></form>
           </div>

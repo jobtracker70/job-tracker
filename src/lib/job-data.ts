@@ -20,14 +20,14 @@ export async function loadJob(db: BusinessDb, id: string) {
   const [{ data: summary }, { data: job }, { data: entriesData }, { data: expensesData }, { data: variations }, { data: subbies }] =
     await Promise.all([
       db.from('job_summary').select('*').eq('id', id).maybeSingle(),
-      db.from('jobs').select('quote_pdf_path, po_ref, decided_at, completed_at, day_start, day_end').eq('id', id).maybeSingle(),
+      db.from('jobs').select('quote_pdf_path, po_ref, decided_at, completed_at, day_start, day_end, quoted_labour').eq('id', id).maybeSingle(),
       db.from('time_entry_costs').select('*').eq('job_id', id).order('start_time', { ascending: false }),
       db
         .from('expenses')
         .select('id, supplier, total, gst, amount_ex_gst, is_credit, hours, expense_date, status, category, worker_id, invoice_number, image_path, source, note, line_items')
         .eq('job_id', id)
         .order('expense_date', { ascending: false }),
-      db.from('variations').select('id, description, amount, hours, materials, created_at').eq('job_id', id).order('created_at'),
+      db.from('variations').select('id, description, amount, hours, materials, created_at, quote_pdf_path').eq('job_id', id).order('created_at'),
       db.from('workers').select('id, name, type').in('type', ['subbie', 'subbie_fixed']),
     ])
   if (!summary || !job) return null
