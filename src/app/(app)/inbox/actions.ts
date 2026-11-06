@@ -1,9 +1,11 @@
 'use server'
 
 import { revalidatePath } from 'next/cache'
+import { redirect } from 'next/navigation'
 import { getDb, type BusinessDb } from '@/lib/db'
 import { checkInbox, emailBusinessId, emailConfigured } from '@/lib/email'
 import { isReadableInvoiceType, processInvoiceFile } from '@/lib/invoices'
+import { moveInvoiceItems, moveItemsBack } from '@/lib/invoice-split'
 import { isOutOfCredit } from '@/lib/ai'
 import { num, text } from '@/lib/format'
 
@@ -83,6 +85,25 @@ export async function moveExpense(expenseId: string, formData: FormData) {
     .eq('id', expenseId)
   refresh()
   revalidatePath(`/inbox/${expenseId}`)
+}
+
+// Some of the items on an invoice belong to another job
+export async function moveItems(expenseId: string, formData: FormData) {
+  const { db } = await getDb()
+  const target = text(formData.get('job_id'))
+  const jobId = target === 'none' ? null : await ownedJob(db, target)
+  if (target !== 'none' && !jobId) return
+  await moveInvoiceItems(db, expenseId, formData.getAll('item').map(Number), jobId)
+  refresh()
+  revalidatePath(`/inbox/${expenseId}`)
+}
+
+// Undo moving items: they go back onto the original invoice
+export async function moveBack(expenseId: string) {
+  const { db } = await getDb()
+  const parentId = await moveItemsBack(db, expenseId)
+  refresh()
+  redirect(`/inbox/${parentId ?? expenseId}`)
 }
 
 // Undo "Ignore": back to "Needs checking"

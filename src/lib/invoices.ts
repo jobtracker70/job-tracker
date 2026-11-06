@@ -123,7 +123,7 @@ export async function processInvoiceFile(
   const { data: sameAmount } = await db
     .from('expenses')
     .select('id, status, job_id, supplier, invoice_number, expense_date, total')
-    .eq('total', total)
+    .or(`total.eq.${total},original_total.eq.${total}`) // a split invoice is checked against its full amount
     .neq('status', 'rejected')
   const sameSupplier = (sameAmount ?? []).filter((e) => {
     const a = compactCode(e.supplier)

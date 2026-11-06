@@ -4,6 +4,12 @@ export type { LineItem }
 
 export const itemsOf = (v: unknown): LineItem[] => (Array.isArray(v) ? (v as LineItem[]) : [])
 
+// What one line cost, or null if the invoice doesn't show a price for it
+export function itemValue(i: LineItem) {
+  if (i.amount != null) return Number(i.amount)
+  return i.unit_price == null ? null : i.unit_price * Number(i.qty ?? 1)
+}
+
 // Adds up the same product across invoices, e.g. "Dulux Wash&Wear 10L" bought on three receipts.
 export function totalItems(invoices: { line_items: unknown; is_credit: boolean }[]) {
   const map = new Map<string, { description: string; qty: number; amount: number; times: number }>()

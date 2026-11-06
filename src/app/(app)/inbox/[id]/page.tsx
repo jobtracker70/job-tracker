@@ -3,8 +3,10 @@ import { notFound } from 'next/navigation'
 import { getDb } from '@/lib/db'
 import { fmtDate, fmtDateTime, hrs, moneyCents } from '@/lib/format'
 import { Pill, SmallTag, buttonClass, cardClass, inputClass, secondaryButtonClass } from '@/components/ui'
-import { moveExpense, restoreExpense } from '../actions'
+import { moveBack, moveExpense, restoreExpense } from '../actions'
 import { InvoiceItems } from '@/components/invoice-items'
+import { itemValue, itemsOf } from '@/lib/items'
+import { MoveItems } from './move-items'
 
 export const dynamic = 'force-dynamic'
 
@@ -25,6 +27,10 @@ export default async function InvoicePage({ params }: { params: Promise<{ id: st
   const { data: activeJobs } = await db.from('jobs').select('id, code, address').eq('status', 'active').order('created_at', { ascending: false })
   const jobOptions = [...(activeJobs ?? [])]
   if (job && !jobOptions.some((j) => j.id === job.id)) jobOptions.unshift(job)
+  const { data: movedParts } = await db.from('expenses').select('id, amount_ex_gst, jobs(code, address)').eq('split_from', x.id)
+  const parts = (movedParts ?? []) as unknown as { id: string; amount_ex_gst: number; jobs: { code: string; address: string | null } | null }[]
+  const items = itemsOf(x.line_items)
+  const canMoveItems = x.status !== 'rejected' && x.category !== 'subbie' && items.length > 1 && items.some((i) => itemValue(i) != null)
   const fileUrl = x.image_path ? (await db.storage.from('invoices').createSignedUrl(x.image_path, 3600)).data?.signedUrl : null
   const status = x.status === 'pending' ? { tone: 'warn' as const, label: 'Needs checking' } : x.status === 'rejected' ? { tone: 'neutral' as const, label: 'Ignored' } : { tone: 'good' as const, label: 'Added to job' }
 
@@ -52,8 +58,29 @@ export default async function InvoicePage({ params }: { params: Promise<{ id: st
         <Info label="Job" value={job ? <Link href={`/jobs/${job.id}`} className="text-brand font-semibold">{job.address ?? job.code}</Link> : 'Not on a job yet'} />
         <Info label="Came from" value={`${SOURCE[x.source] ?? x.source}${sender ? ` (${sender})` : ''}`} />
         <Info label="Received" value={fmtDateTime(x.created_at)} />
+        {x.original_total != null && <Info label="Whole invoice incl GST" value={moneyCents(Number(x.original_total))} />}
         {x.category === 'subbie' && <Info label="Subbie hours invoiced" value={x.hours == null ? '—' : hrs(Number(x.hours))} />}
       </div>
+
+      {x.split_from && (
+        <div className={`${cardClass} p-4 flex flex-wrap items-center justify-between gap-3`}>
+          <p className="text-sm">These items were moved here from <Link href={`/inbox/${x.split_from}`} className="text-brand font-semibold">the original invoice</Link>.</p>
+          <form action={moveBack.bind(null, x.id)}>
+            <button className={secondaryButtonClass}>Move back</button>
+          </form>
+        </div>
+      )}
+      {parts.length > 0 && (
+        <div className={`${cardClass} p-4`}>
+          <p className="text-sm font-semibold mb-1">Items moved to other jobs</p>
+          {parts.map((p) => (
+            <Link key={p.id} href={`/inbox/${p.id}`} className="flex justify-between gap-3 py-1 text-sm text-brand font-medium">
+              <span className="min-w-0">{p.jobs?.address ?? p.jobs?.code ?? 'Needs checking'}</span>
+              <span className="whitespace-nowrap">{moneyCents(Number(p.amount_ex_gst))}</span>
+            </Link>
+          ))}
+        </div>
+      )}
 
       <div className="flex flex-wrap gap-1.5">
         {x.is_credit && <SmallTag tone="good">credit / return</SmallTag>}
@@ -74,6 +101,16 @@ export default async function InvoicePage({ params }: { params: Promise<{ id: st
         {x.status === 'pending' && <Link href="/inbox" className={secondaryButtonClass}>Check it on the Invoices page</Link>}
       </div>
 
+      {canMoveItems && (
+        <MoveItems
+          key={items.length}
+          expenseId={x.id}
+          items={items}
+          jobs={jobOptions.filter((j) => j.id !== x.job_id)}
+          amountExGst={Number(x.amount_ex_gst)}
+          onAJob={!!x.job_id}
+        />
+      )}
       {x.status === 'approved' && (
         <details className={`${cardClass} group`}>
           <summary className="px-5 py-4 cursor-pointer font-semibold text-brand">Wrong job? Move this invoice</summary>
